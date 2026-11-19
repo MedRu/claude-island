@@ -293,6 +293,7 @@ class Feed:
         self.agents = {}               # sid -> {agent id: AgentLog}
         self.budget = 0                # sub-agent transcript bytes still allowed this poll
         self.limits_key = None
+        self.transcripts = {}           # status file -> its chat's transcript, for when a reading was made
         self.limits = None
 
     def _transcript(self, sid):
@@ -399,36 +400,36 @@ class Feed:
         return running + [a for a in agents if not a["running"]][:AGENTS_KEPT]
 
     def _limits(self):
-        """Plan limits merged from every chat's status line, re-read only when a file changed.
+        """Plan limits from the chat that got a reply most recently, per limit; re-read only when that changes.
 
         Each chat's file holds the limits from that chat's last reply, and an idle chat keeps rewriting its
-        file (the status line refreshes on a timer), so the newest file is often the stalest reading. Instead,
-        per limit, the latest window wins, and within one window the highest use, since use only grows.
+        file (the status line refreshes on a timer), so the newest file is often the stalest reading. A reading
+        is as fresh as its chat's last reply, so the time that counts is when the chat's transcript last
+        changed (the file's own time when there is no transcript). Readings are not mixed across chats by their
+        reset times: two chats may run on two Claude logins with different limits, and the chat in use wins.
         """
-        files = sorted(((_mtime(f), f) for f in STATUS_DIR.glob("*.json")), reverse=True)
-        if files != self.limits_key:
-            self.limits_key = files
+        key = []
+        for f in STATUS_DIR.glob("*.json"):
+            transcript = self.transcripts.get(f)
+            key.append((_mtime(f), _mtime(Path(transcript)) if transcript else 0.0, f))
+        key.sort(reverse=True)
+        if key != self.limits_key:
+            self.limits_key = key
+            readings = []
+            for file_time, _, f in key:
+                data = read_json(f) or {}
+                transcript = data.get("transcript_path")
+                if transcript:
+                    self.transcripts[f] = transcript
+                reply_time = _mtime(Path(transcript)) if transcript else 0.0
+                readings.append((reply_time or file_time, as_dict(data.get("rate_limits"))))
             merged = {}
-            for _, f in files:
-                found = as_dict((read_json(f) or {}).get("rate_limits"))
-                for key, reading in found.items():
-                    if isinstance(reading, dict) and reading.get("used_percentage") is not None:
-                        merged[key] = _fresher(merged.get(key), reading)
+            for _, found in sorted(readings, key=lambda r: r[0], reverse=True):
+                for name, reading in found.items():
+                    if name not in merged and isinstance(reading, dict) and reading.get("used_percentage") is not None:
+                        merged[name] = reading
             self.limits = merged or None
         return self.limits
-
-
-SAME_WINDOW_S = 600       # resets_at of two readings this close: the same limit window
-
-
-def _fresher(a, b):
-    """The more recent of two readings of one limit ({"used_percentage", "resets_at"}); a may be None."""
-    if a is None:
-        return b
-    ra, rb = a.get("resets_at") or 0, b.get("resets_at") or 0
-    if abs(ra - rb) > SAME_WINDOW_S:
-        return a if ra > rb else b
-    return a if float(a["used_percentage"]) >= float(b["used_percentage"]) else b
 
 
 def _usage(line):
