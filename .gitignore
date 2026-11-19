@@ -2,7 +2,9 @@
 config/island_config.json
 config/sounds/
 config/hidden_windows.txt
-config/show.flag
+config/*.flag
+config/quit.mark
+config/statusline_before.json
 config/island.log
 config/island.lock
 

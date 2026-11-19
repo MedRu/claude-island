@@ -17,7 +17,7 @@ from platforms.common import APP_DIR
 HIDDEN = {}      # stays empty: windows are never hidden here
 
 
-def focus(title):
+def focus(title, pid=None):
     return False
 
 
@@ -37,7 +37,7 @@ def answer_other(title, n_options, text):
     return False
 
 
-def hide_all(titles, path=None):
+def hide_all(chats, path=None):
     pass
 
 
@@ -115,8 +115,10 @@ def acquire():
 
 
 # ----------------------------------------------------------------- autostart
-def hook_command():
-    return f'nohup "{sys.executable}" "{APP_DIR.as_posix()}/island.py" --hook >/dev/null 2>&1 &'
+def hook_command(event="SessionStart"):
+    """The hook command. --detach lets the widget outlive the hook; --on-prompt: not after you quit it."""
+    extra = " --on-prompt" if event == "UserPromptSubmit" else ""
+    return f'"{sys.executable}" "{APP_DIR.as_posix()}/island.py" --hook --detach{extra}'
 
 
 def is_ours(command):
@@ -129,6 +131,10 @@ def system_fonts():
     return [QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()]
 
 
+def app_identity(app):
+    app.setDesktopFileName("claude-island")      # matches the menu entry, for the taskbar name and icon
+
+
 def force_show(widget):
     pass
 
@@ -139,9 +145,18 @@ def force_focus(widget):
     widget.setFocus()
 
 
+HAS_GLASS = False
+
+
+def glass(widget, rect, radius, dark=True):
+    return False
+
+
 def notch_rect(screen):
     return None
 
 
-def float_over_menu_bar(widget, on):
-    pass
+def keep_on_top(widget, over_menu_bar=False):
+    """Put the window back above the others; some window managers drop stay-on-top windows behind."""
+    if widget.isVisible():
+        widget.raise_()

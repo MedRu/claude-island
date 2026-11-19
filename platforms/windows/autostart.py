@@ -14,8 +14,10 @@ shortcut_supported = True
 shortcut_label = "Start menu entry"
 
 
-def hook_command():
-    return f'wscript.exe "{LAUNCHER.as_posix()}" --hook'
+def hook_command(event="SessionStart"):
+    """--on-prompt: a prompt in an open chat does not bring back an island you quit."""
+    extra = " --on-prompt" if event == "UserPromptSubmit" else ""
+    return f'wscript.exe "{LAUNCHER.as_posix()}" --hook{extra}'
 
 
 def is_ours(command):

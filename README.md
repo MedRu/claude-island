@@ -46,7 +46,8 @@ Not affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropi
 - PySide6 (`PySide6-Essentials` is enough)
 - Claude Code
 - Windows 10 or 11 for the full feature set. macOS and Linux work with reduced features.
-- Optional, macOS: `pyobjc-framework-Cocoa` for exact notch detection.
+- Recommended on macOS: `pyobjc-framework-Cocoa`, for the glass background, the exact notch size, and
+  faster focusing and hiding of terminal apps.
 
 ## Install and run
 
@@ -62,12 +63,28 @@ pip install -r requirements.txt
 
 **macOS / Linux.** Run `./start-claude-island.sh`. It uses `python3` from your PATH, or the interpreter named
 in `$PYTHON`, which needs PySide6. A lock on `config/island.lock` keeps a single copy. Run
-`python3 island.py` in a terminal if you need to see errors.
+`python3 island.py` in a terminal if you need to see errors. On macOS, Settings, Startup, **Claude Island in
+Applications** adds a small app to `~/Applications`, so you can start it from Spotlight or Launchpad. It runs
+without a Dock icon, like a menu bar app; its menu is the icon in the menu bar.
 
 **Start with Claude.** In Settings, under Startup, turn on "start when a Claude chat starts". This adds
 asynchronous `SessionStart` and `UserPromptSubmit` hooks to `~/.claude/settings.json` that run the launcher
-with `--hook`, so the widget is there as soon as a chat opens. A copy of your previous settings file is kept
-next to it as `settings.json.bak-island-ui`. Turning the option off removes the hooks again.
+with `--hook`, so the widget is there as soon as a chat opens. On macOS and Linux the hook adds `--detach`, so
+the widget starts in its own session and outlives the hook. A copy of your previous settings file is kept
+next to it as `settings.json.bak-island-ui`. Turning the option off removes the hooks again. Hooks written by
+an older version are updated when the widget starts.
+
+**Starting and quitting.** With or without Claude chats running:
+
+| To | Do |
+|---|---|
+| start it, or bring it back | run the launcher (or the Applications / Start menu entry) again |
+| hide it for a while | Ctrl+Alt+I (⌃⌥I on macOS) from any app; the same again shows it |
+| quit | the power button in the panel header (click twice), "Quit" in the tray / menu bar menu, or Ctrl+Q |
+
+After you quit, prompts in chats that are already open do not bring it back; a new chat does (when the start
+hooks are on), and so does starting it yourself. From a terminal, `island.py --toggle` hides or shows the
+running widget and `island.py --quit` quits it.
 
 The widget keeps running with or without chats, unless you set Settings, Startup, "Quit after N minutes"
 (0, the default, means never). When it was started by a hook and is not pinned, it hides while nothing is
@@ -75,60 +92,30 @@ working; the tray icon stays.
 
 ## Status line setup
 
-Chat cards work without any extra setup. The limit pills and the exact context window size need one more
+Chat cards work without any extra setup. The limit pills, cost and the exact context window size need one more
 piece: Claude Code only exposes plan limits to the status line command, which receives a JSON document on
-stdin. The scripts in `statusline/` save that JSON to `~/.claude/island/<session_id>.json`, where the widget
-reads it, and print a short status line of their own (model and context %). Without them the limit pills
-show "–".
+stdin. Without it the limit pills show "–".
 
-Add this to `~/.claude/settings.json`, using the real path to the script.
+**The easy way:** in Settings, under Startup, turn on **Show plan limits and cost**. This sets Claude Code's
+status line to `statusline/island_statusline.py`, which saves that JSON to `~/.claude/island/<session_id>.json`
+for the widget and prints the model and context %. If you already had a status line, it keeps running and its
+output is what you see: the island script calls it with the same input. Turning the switch off puts your own
+status line back. A copy of your settings file is kept as `settings.json.bak-island-ui`. Limits appear after
+the next message in a chat, and refresh whenever a chat's status line refreshes.
 
-Windows:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\path\\to\\claude-island\\statusline\\island-statusline.ps1"
-  }
-}
-```
-
-macOS / Linux (needs `python3`):
+**By hand**, add this to `~/.claude/settings.json` with the real paths:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "sh /path/to/claude-island/statusline/island-statusline.sh"
+    "command": "python3 /path/to/claude-island/statusline/island_statusline.py"
   }
 }
 ```
 
-Limits refresh whenever a session's status line refreshes.
-
-**Already have a status line?** Keep it, and save the JSON before it runs. The simplest way is a small
-wrapper that reads stdin once, feeds it to the island script (discarding its output) and then to your own
-script:
-
-```sh
-#!/bin/sh
-# my-statusline.sh
-input=$(cat)
-printf '%s' "$input" | sh /path/to/island-statusline.sh >/dev/null
-printf '%s' "$input" | sh /path/to/your-statusline.sh
-```
-
-In PowerShell the same idea is:
-
-```powershell
-$raw = [Console]::In.ReadToEnd()
-$raw | powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\island-statusline.ps1 | Out-Null
-$raw | powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\your-statusline.ps1
-```
-
-If your status line is already a script you control, you can instead copy the few lines that save the JSON
-(the block marked in `island-statusline.ps1` or `island-statusline.sh`) to its top.
+To keep your own status line, append `--then-b64 <your command, base64-encoded>`. The older shell scripts
+`island-statusline.ps1` (Windows) and `island-statusline.sh` still work and are recognised by the switch.
 
 ## Using it
 
@@ -234,10 +221,17 @@ Click the island first: hovering never takes keyboard focus away from your termi
 | Ctrl+P | pin |
 | Ctrl+H | hide or show all chats |
 | Ctrl+R | refresh |
+| Ctrl+W | hide the island (bring it back with the shortcut below or the tray menu) |
 | Ctrl+Q | quit |
 | F1 or ? | show this list |
 
 On macOS, Cmd works in place of Ctrl. In Settings, Esc, Ctrl+W or Ctrl+, close it.
+
+**From any app**, **Ctrl+Alt+I** (Windows) or **⌃⌥I** (macOS) hides the island, and pressing it again brings
+it back. It can be turned off in Settings, Startup. While hidden, sounds still play and the tray icon stays; its
+menu has "Show Claude Island" and "Quit". On Linux, bind a desktop shortcut to
+`python3 island.py --toggle`. From a terminal on any OS, `island.py --toggle` hides or shows the running
+island and `island.py --quit` quits it.
 
 ### Settings
 
@@ -257,8 +251,9 @@ slider or number you clicked first, so scrolling the page never changes a value 
 - **Sounds:** on/off, volume, each cue on/off, and your own `.wav` per cue with a test button.
 - **Timing:** hover delay, linger, animation speed, reduce motion, when a chat counts as Done or Forgotten,
   and when the pinned bar shrinks to the mascot.
-- **Startup:** start when a Claude chat starts (hooks), Start menu entry, show when started by hand, pin,
-  open when Claude needs you, quit after N minutes with no chat.
+- **Startup:** start when a Claude chat starts (hooks), show plan limits and cost (status line), Start menu
+  entry, show when started by hand, pin, the hide/show shortcut, open when Claude needs you, quit after N
+  minutes with no chat.
 
 ### Sounds
 
@@ -271,9 +266,10 @@ started). Mute them from the right-click menu. The sounds are synthesised by `so
 ### macOS notch dock
 
 On a MacBook with a camera notch, drag the bar to the top centre of the screen: near the notch it docks into
-it. Docked, it hangs from the top edge in the notch's black, with the mascot on the left wing and the state on
-the right (the chat count with a coloured dot, or the 5-hour limit ring when nothing works). Hover opens the
-panel downward. Drag it away to undock. The choice is remembered across restarts.
+it. Docked, it hangs from the top edge in the notch's black. While nothing happens it is the notch alone;
+while Claude works, the mascot peeks out on a small wing at the left, with a dot on the right when a chat needs
+you (amber) or just finished (green). Hover opens the panel downward, in front of every app. Drag it away to
+undock. The choice is remembered across restarts.
 
 With `pip install pyobjc-framework-Cocoa`, the exact notch size is read from AppKit and the window is raised
 above the menu bar. Without it, the notch is estimated (200 pt wide, centred, on screens with the taller notch
@@ -340,17 +336,21 @@ Everything that touches the operating system lives in `platforms/<os>/`; the res
 | Sounds | yes | yes (`afplay`) | yes (`paplay`, then `aplay`) |
 | New chat | Windows Terminal | Terminal.app | `x-terminal-emulator` or a common terminal |
 | Start with Claude (hooks) | yes | yes | yes |
-| Menu entry | Start menu | no | applications menu (`~/.local/share/applications/claude-island.desktop`) |
+| Menu entry | Start menu | `~/Applications/Claude Island.app` | applications menu (`~/.local/share/applications/claude-island.desktop`) |
 | Notch dock | no | yes (untested on real hardware) | no |
-| Click a card to focus its terminal | yes | no | no |
+| Glass background | no | yes (pyobjc) | no |
+| Click a card to focus its terminal | yes | the app, and the tab in Terminal and iTerm2 | no |
 | Allow / Deny / answers / reply box / Compact | yes | no | no |
-| Hide all chats | yes | no | no |
+| Hide all chats | yes | hides the terminal apps | no |
+| Shortcut from any app to hide the island | Ctrl+Alt+I | ⌃⌥I | `island.py --toggle` |
 | ✕ on a card | closes the window | ends the process (SIGTERM) | ends the process (SIGTERM) |
 | Log file `config/island.log` | yes | no | no |
 
-On macOS and Linux, terminal windows are not found by title, so the actions that need a window do nothing,
-and a reused pid cannot be told apart from the chat's own process. Contributions of a `winctl.py` for these
-platforms are welcome.
+On macOS a chat is found through its process: the parents of its `claude` process lead to the app it runs in
+(Terminal, iTerm2, VS Code, Ghostty...). That whole app is focused or hidden, with any other windows it has.
+macOS asks once for permission to control Terminal, iTerm2 or System Events. Typing into a chat (answers,
+Compact) is not supported there yet. On Linux, the actions that need a window do nothing. On both, a reused pid
+cannot be told apart from the chat's own process. Contributions are welcome.
 
 ## Files
 

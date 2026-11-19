@@ -5,7 +5,7 @@ import functools
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QTransform
 
 from feed import clamp, lerp
 from platforms import get_platform
@@ -87,11 +87,13 @@ def _shadow(w, h, rad, alpha, dpr):
     return pm
 
 
-def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False):
+def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False):
     """Paint the shadow, the filled rounded shape and its border; return the shape for clipping the content.
 
     The shadow is cached by size, rounded to snap px so an animation does not flood the cache. flush_top, for the
     notch dock, squares the top corners and drops the shadow and border so the island merges with the notch.
+    With glass (a native blur behind the shape) the shadow stays outside the shape, so it does not darken the
+    glass, and a light rim catches the top edge.
     """
     if flush_top:
         shape, edge = QPainterPath(), QPainterPath()
@@ -103,11 +105,23 @@ def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False):
     w = max(1, round(rect.width() / snap) * snap)
     h = max(1, round(rect.height() / snap) * snap)
     dpr = qp.device().devicePixelRatioF() if qp.device() else 1.0
-    qp.drawPixmap(QPointF(rect.left() - 12, rect.top() - 6), _shadow(w, h, rad, round(255 * shadow_k), dpr))
     shape = QPainterPath()
     shape.addRoundedRect(rect, rad, rad)
+    qp.save()
+    if glass:
+        outside = QPainterPath()
+        outside.addRect(rect.adjusted(-40, -40, 40, 40))
+        qp.setClipPath(outside.subtracted(shape))
+    qp.drawPixmap(QPointF(rect.left() - 12, rect.top() - 6), _shadow(w, h, rad, round(255 * shadow_k), dpr))
+    qp.restore()
     qp.fillPath(shape, bg)
-    qp.setPen(QPen(BORDER, 1))
+    if glass:
+        rim = QLinearGradient(0, rect.top(), 0, rect.top() + min(rect.height(), 60))
+        rim.setColorAt(0, QColor(255, 255, 255, 70))
+        rim.setColorAt(1, QColor(255, 255, 255, 14))
+        qp.setPen(QPen(QBrush(rim), 1))
+    else:
+        qp.setPen(QPen(BORDER, 1))
     qp.drawPath(shape)
     return shape
 
@@ -244,6 +258,23 @@ def draw_eye(qp, c, size, color, slashed=False):
     qp.drawEllipse(c, size * 0.14, size * 0.14)
     if slashed:
         qp.drawLine(QPointF(x - w / 2, y + h * 0.75), QPointF(x + w / 2, y - h * 0.75))
+    qp.restore()
+
+
+def draw_power(qp, c, size, color, filled=False):
+    """Power symbol for Quit; filled in a disc while it waits for the second click."""
+    r = size / 2
+    qp.save()
+    if filled:
+        qp.setPen(Qt.PenStyle.NoPen)
+        qp.setBrush(color)
+        qp.drawEllipse(c, r + 3, r + 3)
+        color = QColor(255, 255, 255)
+    qp.setPen(pen(color, max(1.3, size * 0.12)))
+    qp.setBrush(Qt.BrushStyle.NoBrush)
+    ring = QRectF(c.x() - r * 0.8, c.y() - r * 0.7, r * 1.6, r * 1.6)
+    qp.drawArc(ring, 60 * 16, -300 * 16)          # open at the top, around the line
+    qp.drawLine(QPointF(c.x(), c.y() - r), QPointF(c.x(), c.y() - r * 0.05))
     qp.restore()
 
 

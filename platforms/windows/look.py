@@ -5,10 +5,20 @@ import ctypes
 
 UI_FONTS = ["Segoe UI Variable Text", "Segoe UI"]
 SW_SHOW = 5
+HWND_TOPMOST = ctypes.c_void_p(-1)
+KEEP_FLAGS = 0x0002 | 0x0001 | 0x0010 | 0x0200    # SWP_NOMOVE | NOSIZE | NOACTIVATE | NOOWNERZORDER
 
 
 def fix_tool_window(widget):
     pass
+
+
+def app_identity(app):
+    """Group our windows and notifications as "Claude Island", not as python.exe."""
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MedRu.ClaudeIsland")
+    except (AttributeError, OSError):
+        pass
 
 
 def force_focus(widget):
@@ -20,12 +30,25 @@ def force_focus(widget):
     widget.setFocus()
 
 
+HAS_GLASS = False
+
+
+def glass(widget, rect, radius, dark=True):
+    return False
+
+
 def notch_rect(screen):
     return None
 
 
-def float_over_menu_bar(widget, on):
-    pass
+def keep_on_top(widget, over_menu_bar=False):
+    """Put the island back in the topmost band.
+
+    Windows drops a topmost window behind others now and then (after the taskbar or a full-screen app took
+    the top, or another topmost window was shown), so this runs every second. It never takes the focus.
+    """
+    if widget.isVisible():
+        ctypes.windll.user32.SetWindowPos(ctypes.c_void_p(int(widget.winId())), HWND_TOPMOST, 0, 0, 0, 0, KEEP_FLAGS)
 
 
 def force_show(widget):

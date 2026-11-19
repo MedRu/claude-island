@@ -529,6 +529,9 @@ class SettingsWindow(QWidget):
                 ("Background only", self.slider("background_opacity", 0, 100)),
                 ("Cards", self.slider("card_opacity", 20, 100)),
                 "~Cards keep their own opacity: a see-through background no longer fades them.",
+                *([("Glass", self.toggle("glass")),
+                   "~Blurs what is behind the island, like macOS menus. Docked in the notch it stays black."]
+                  if get_platform().look.HAS_GLASS else []),
                 "Size",
                 ("Width", self.number("width", 320, 600, 10, " px")),
                 ("Bar height", self.number("bar_height", 48, 80, 2, " px")),
@@ -579,14 +582,22 @@ class SettingsWindow(QWidget):
         if auto.shortcut_supported:
             menu.append((auto.shortcut_label, self.outside(auto.shortcut_exists, auto.set_shortcut)))
         start_hook = self.outside(settings.start_hook_installed, settings.set_start_hook)
+        status_line = self.outside(settings.status_line_installed, settings.set_status_line)
         return ["Starting",
                 ("Start when a Claude chat starts", start_hook),
                 "~Adds two hooks to ~/.claude/settings.json (a backup is kept next to it).",
+                ("Show plan limits and cost", status_line),
+                "~Sets Claude Code's status line to a small script that shares the limits with the island. "
+                "Your own status line, if you had one, keeps showing. Applies from the next message in a chat.",
                 *menu,
                 ("Show when started by hand", self.toggle("show_when_started_by_hand")),
                 "~Started by hand (the .vbs or the Start menu) it works alone, no Claude chat needed.",
                 "Staying",
                 ("Keep on screen when idle (pin)", self.toggle("pinned")),
+                *([(f"{get_platform().hotkey.LABEL} hides or shows the island", self.toggle("global_hotkey")),
+                   "~Works from any app. Hidden, the island stays away until you press it again or use the "
+                   "tray menu; sounds still play."]
+                  if get_platform().hotkey.LABEL else []),
                 ("Open when Claude needs you", self.toggle("auto_open")),
                 ("Quit after no chat for", self.number("quit_after_min", 0, 600, 5, " min")),
                 "~0 min = never: it keeps running with or without Claude chats."]

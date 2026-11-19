@@ -10,14 +10,30 @@ from pathlib import Path
 
 from platforms import get_platform
 
-# Checked before Qt is imported, so the hook that runs on every prompt exits cheaply when we already run.
-# A copy started by hand leaves a flag asking the running one to show itself.
+# All of this runs before Qt is imported, so the hook that runs on every prompt exits cheaply.
+CONFIG_DIR = Path(__file__).resolve().parent / "config"
+QUIT_MARK = CONFIG_DIR / "quit.mark"     # you quit it: prompts in open chats do not bring it back
+
+# --detach (macOS and Linux hooks): start again in a session of our own, so the widget outlives the hook.
+if "--detach" in sys.argv:
+    import subprocess
+    subprocess.Popen([sys.executable] + [a for a in sys.argv if a != "--detach"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    sys.exit(0)
+# After you quit, only a new chat (SessionStart) or starting it yourself brings it back, not every prompt.
+if "--on-prompt" in sys.argv and QUIT_MARK.exists():
+    sys.exit(0)
+# Already running: a copy started by hand leaves a flag for the running one: show yourself, or with --toggle
+# hide or show, or with --quit quit.
 if not get_platform().instance.acquire():
     if "--hook" not in sys.argv:
-        flag = Path(__file__).resolve().parent / "config" / "show.flag"
-        flag.parent.mkdir(exist_ok=True)
-        flag.touch()
+        name = "toggle" if "--toggle" in sys.argv else "quit" if "--quit" in sys.argv else "show"
+        CONFIG_DIR.mkdir(exist_ok=True)
+        (CONFIG_DIR / f"{name}.flag").touch()
     sys.exit(0)
+if "--quit" in sys.argv:              # nothing running to quit
+    sys.exit(0)
+QUIT_MARK.unlink(missing_ok=True)
 
 import math
 import os
@@ -35,14 +51,16 @@ import sounds
 from drawing import (AMBER, BG, BLUE, CARD, CARD_HOVER, CLAUDE, CLAUDE_LIGHT, CLOSE_RED, DIM, FORGOT,
                      GRAY, GREEN, ICON, INK, RED, TIME_BAR, TRACK, WHITE, WHITE_30, WHITE_170, WHITE_200, WHITE_220,
                      WORKING, Spring, apply_palette, draw_check, draw_cross, draw_eye, draw_gear, draw_mascot,
-                     draw_pin, draw_plus, draw_ring, draw_spark, draw_spinner, draw_up_arrow, ease_out, font,
+                     draw_pin, draw_plus, draw_power, draw_ring, draw_spark, draw_spinner, draw_up_arrow, ease_out, font,
                      icon_pixmap, paint_frame, ramp)
 from feed import (Feed, clamp, clean_status_dir, fmt_dur, fmt_tokens, lerp, read_json, same_process,
                   session_state, short_tool, tool_detail)
 
 PLAT = get_platform()
 winctl = PLAT.winctl
-SHOW_FLAG = settings.HERE / "config" / "show.flag"      # the file the guard above touches
+SHOW_FLAG = settings.HERE / "config" / "show.flag"      # the files the guard above touches
+TOGGLE_FLAG = settings.HERE / "config" / "toggle.flag"
+QUIT_FLAG = settings.HERE / "config" / "quit.flag"
 HIDDEN_FILE = settings.HERE / "config" / "hidden_windows.txt"
 CFG = settings.load()
 
@@ -51,9 +69,10 @@ OPEN_SPRING = (438.0, 1.0)            # stiffness, damping: about 0.3 s to open,
 CLOSE_SPRING = (987.0, 1.0)           # about 0.2 s to close
 ASK_ROW_H = 30                        # answer buttons under a waiting card
 REPLY_H = 32                          # reply box under them
-NOTCH_WING = 64                       # docked in a macOS notch: px of bar on each side of it
+NOTCH_WING = 40                       # docked in a macOS notch: px each side of it while Claude works
 NOTCH_SNAP = 80                       # how close a drag must come to the notch to dock
 NOTCH_BLACK = QColor(0, 0, 0)
+GLASS_TINT = 0.6                      # share of the background colour painted over the macOS glass
 AGENT_ROW_H = 18                      # one sub-agent under its chat's card
 AGENT_ROWS_MAX = 3                    # beyond this the last row says "+N more"
 AGENT_LINGER_S = 60                   # a finished sub-agent keeps its row this long
@@ -77,10 +96,11 @@ VERBS = [
     ({"websearch", "webfetch"}, "Searching the web"),
     ({"agent", "task"}, "Running agents"),
 ]
-TIPS = {"newchat": "New chat", "settings": "Settings", "close": "Close this chat", "send": "Send",
+TIPS = {"quit": "Quit Claude Island (click twice). A new chat starts it again.", "newchat": "New chat", "settings": "Settings", "close": "Close this chat", "send": "Send",
         "compact": "Compact: summarise this chat to free its context"}
 KEYS_HELP = ("↑/↓ or Tab: pick a chat · Enter: open it · Del twice: close it · Esc: close · "
-             "Ctrl+, settings · Ctrl+N new chat · Ctrl+P pin · Ctrl+H hide/show all · Ctrl+R refresh · Ctrl+Q quit")
+             "Ctrl+, settings · Ctrl+N new chat · Ctrl+P pin · Ctrl+H hide/show all chats · Ctrl+W hide the island · "
+             "Ctrl+R refresh · Ctrl+Q quit · from any app: Ctrl+Alt+I (⌃⌥I on a Mac) hides or shows the island")
 
 ctx_color = partial(ramp, CONTEXT_STOPS)
 limit_color = partial(ramp, LIMIT_STOPS)
@@ -247,7 +267,10 @@ class Island(QWidget):
         self.confirm = None            # (sid, action, until): a second click does it
         self.last_hover = 0.0
         self.kb_open = False           # opened from the keyboard: stay open until Esc or focus loss
+        self.island_hidden = False     # hidden by you (shortcut or menu) until you show it again
+        self.hotkey = None             # label of the shortcut that hides and shows the island from any app
         self.notch = None              # macOS: QRect of the camera notch we are docked in
+        self.glassed = False           # a native blur is behind the shape (macOS), so paint only a tint
         self.reply_sid = None          # the chat the reply box answers
         self.reply_lock = None         # (sid, tool id) once you start typing
 
@@ -268,10 +291,12 @@ class Island(QWidget):
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self.on_tray_activated)
         self.apply_settings()
+        settings.update_start_hook()
         if self.cfg["notch"]:
             self.dock(PLAT.look.notch_rect(self.screen()))
         self.tray.show()
-        SHOW_FLAG.unlink(missing_ok=True)
+        for flag in (SHOW_FLAG, TOGGLE_FLAG, QUIT_FLAG):
+            flag.unlink(missing_ok=True)
         self.refresh()
         self.panel_height.x = self.panel_height.target
         self.data.start()
@@ -292,6 +317,7 @@ class Island(QWidget):
         self.panel_height.tune(200 * speed, 0.9)
         self.visibility.tune(170 * speed, 0.9)
         self.bar_width.target = self.W
+        self.sync_hotkey()
         sounds.configure(c["sound_volume"], {cue: c[f"sound_file_{cue}"] for cue in sounds.CUES})
         self.reply.setStyleSheet(
             f"QLineEdit{{background:#2b2b2b;color:#fff;border:1px solid #3d3d3d;border-radius:6px;padding:0 8px;"
@@ -326,6 +352,8 @@ class Island(QWidget):
         self.cfg[key] = value
         settings.save(self.cfg)
         self.apply_settings()
+        self.sync_glass()
+        self.update()
 
     def toggle_pin(self):
         self.set_cfg("pinned", not self.pinned)
@@ -365,16 +393,19 @@ class Island(QWidget):
         self.act_sound = m.addAction("Sounds", lambda: self.set_cfg("sounds", not self.cfg["sounds"]))
         self.act_sound.setCheckable(True)
         m.addAction("Move back to bottom-right", self.reset_position)
+        self.act_island = m.addAction("Hide Claude Island", self.toggle_island)
         self.act_hide = m.addAction("Hide all chats", self.toggle_hide_all)
         m.addAction("New chat…", lambda: self.new_chat_menu(QCursor.pos()))
         m.addSeparator()
-        m.addAction("Quit Claude Island", QApplication.quit)
+        m.addAction("Quit Claude Island", self.quit_by_user)
         m.aboutToShow.connect(self.sync_menu)
         return m
 
     def sync_menu(self):
         self.act_sound.setChecked(self.cfg["sounds"])
         self.act_hide.setText("Show all chats" if winctl.HIDDEN else "Hide all chats")
+        label = "Show Claude Island" if self.island_hidden else "Hide Claude Island"
+        self.act_island.setText(f"{label}\t{self.hotkey}" if self.hotkey else label)
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -395,6 +426,14 @@ class Island(QWidget):
         if SHOW_FLAG.exists():   # someone started us by hand again
             SHOW_FLAG.unlink(missing_ok=True)
             self.solo = True
+            self.island_hidden = False
+        if TOGGLE_FLAG.exists():
+            TOGGLE_FLAG.unlink(missing_ok=True)
+            self.toggle_island()
+        if QUIT_FLAG.exists():
+            QUIT_FLAG.unlink(missing_ok=True)
+            self.quit_by_user()
+            return
         if winctl.HIDDEN:
             before = dict(winctl.HIDDEN)
             winctl.prune_hidden([x["title"] for x in self.sessions])
@@ -416,7 +455,11 @@ class Island(QWidget):
             self.follow_notch()
         self.pick_agent_rows(now)
         self.panel_height.target = self.expanded_height()
+        if self.notch:
+            self.size_bar()            # the wings come and go with the news
         self.apply_hover()
+        if not self.dragging:
+            self.stay_on_top()
         if self.springs_settled():
             self.apply_geometry()      # the frame timer may be stopped: follow a monitor change
         busy = any(s["status"] == "busy" or running_agents(s) for s in self.sessions)
@@ -547,8 +590,11 @@ class Island(QWidget):
         return time.time() - self.last_activity > self.cfg["mini_after_s"]
 
     def should_show(self):
+        if self.island_hidden:
+            return False
+        # docked, an idle island is just the notch's own black, there to be hovered
         return (self.working() or self.toast is not None or self.pinned or self.hover or self.lingering
-                or self.dragging or bool(winctl.HIDDEN) or self.previewing()
+                or self.dragging or (self.notch is not None and bool(self.sessions)) or bool(winctl.HIDDEN) or self.previewing()
                 or (self.solo and self.cfg["show_when_started_by_hand"]))
 
     # ---------------------------------------------------------------- actions
@@ -607,7 +653,7 @@ class Island(QWidget):
     def answer(self, s, key):
         """A button under a waiting card: "open", "esc" (deny) or a key to press ("1" allows)."""
         if key == "open":
-            return winctl.focus(s["title"])
+            return winctl.focus(s["title"], s["pid"])
         if s["status"] == "waiting":         # only type into a prompt that is still there
             if key == "esc":
                 self.act_on(s, "waiting", winctl.reject_with, s["title"], "")
@@ -634,14 +680,43 @@ class Island(QWidget):
                 print("action failed:", e, file=sys.stderr)
         threading.Thread(target=job, daemon=True).start()
 
+    def quit_by_user(self):
+        """Quit until a new chat starts or you start it again: prompts in open chats do not reopen it."""
+        try:
+            QUIT_MARK.parent.mkdir(exist_ok=True)
+            QUIT_MARK.touch()
+        except OSError:
+            pass
+        QApplication.quit()
+
+    def toggle_island(self):
+        """Hide the island until you show it again (the shortcut, the menu, or starting it again)."""
+        self.island_hidden = not self.island_hidden
+        if self.island_hidden:
+            self.kb_open = False
+            self.attention = set()
+            if self.previewing():
+                self.settings_win.close()
+        self.apply_hover()
+        if not self.island_hidden:
+            self.stay_on_top()
+
+    def sync_hotkey(self):
+        want = bool(self.cfg["global_hotkey"])
+        if want and not self.hotkey:
+            self.hotkey = PLAT.hotkey.register(lambda: QTimer.singleShot(0, self.toggle_island))
+        elif not want and self.hotkey:
+            PLAT.hotkey.unregister()
+            self.hotkey = None
+
     def toggle_hide_all(self):
         if self.hider and self.hider.is_alive():   # still hiding from the last click
             return
         if winctl.HIDDEN:
             winctl.show_all(HIDDEN_FILE)
         else:   # counting tabs takes a second or two, so keep it off the UI thread
-            titles = [s["title"] for s in self.sessions]
-            self.hider = threading.Thread(target=winctl.hide_all, args=(titles, HIDDEN_FILE), daemon=True)
+            chats = [(s["title"], s["pid"]) for s in self.sessions]
+            self.hider = threading.Thread(target=winctl.hide_all, args=(chats, HIDDEN_FILE), daemon=True)
             self.hider.start()
         self.update()
 
@@ -727,7 +802,13 @@ class Island(QWidget):
         """Bar height and closed width: from the settings, or when docked, the notch plus a wing each side."""
         n = self.notch
         self.CH = n.height() if n else int(self.cfg["bar_height"])
-        self.mini_w = n.width() + 2 * NOTCH_WING if n else self.CH + 4
+        self.mini_w = n.width() + 2 * self.notch_wing() if n else self.CH + 4
+
+    def notch_wing(self):
+        """Docked and closed, the island is the notch alone, with a small wing for the mascot while there is
+        news: a chat working or waiting, or one that just finished."""
+        busy = self.working() or self.attention or (self.toast and self.toast[0] in ("done", "waiting"))
+        return NOTCH_WING if busy else 0
 
     def dock(self, rect):
         """Dock into the notch rect, or undock with None. Docked, the island hangs from the top and opens down."""
@@ -735,7 +816,7 @@ class Island(QWidget):
             return
         self.notch = rect
         self.size_bar()
-        PLAT.look.float_over_menu_bar(self, bool(rect))
+        PLAT.look.keep_on_top(self, bool(rect))
         if rect:
             self.grow_down = True
         self.apply_hover()
@@ -802,6 +883,7 @@ class Island(QWidget):
             vis = clamp(self.visibility.x)
             if vis > 0.01 and not self.isVisible():
                 self.show()
+                self.stay_on_top()
             opacity = vis * self.cfg["opacity"] / 100
             if abs(opacity - self.last_opacity) > 0.002:
                 self.setWindowOpacity(opacity)
@@ -840,6 +922,7 @@ class Island(QWidget):
             if self.geometry().getRect() != (x, y, outer_w, outer_h):
                 self.setGeometry(x, y, outer_w, outer_h)
             self.pill = QRectF((outer_w - width) / 2, 0, width, h)
+            self.sync_glass()
             return
         g = self.screen_geo()
         # back on screen after a monitor change
@@ -855,9 +938,23 @@ class Island(QWidget):
         if self.geometry().getRect() != (x, y, outer_w, outer_h):
             self.setGeometry(x, y, outer_w, outer_h)
         self.pill = QRectF(outer_w - self.M - width, pill_y, width, h)
+        self.sync_glass()
+
+    def sync_glass(self):
+        """Keep the macOS glass under the painted shape. Docked in the notch the island stays black instead."""
+        want = self.cfg["glass"] and PLAT.look.HAS_GLASS and self.notch is None
+        if want or self.glassed:
+            self.glassed = PLAT.look.glass(self, self.pill if want else None, self.RAD, BG.lightnessF() < 0.5)
 
     # ---------------------------------------------------------------- mouse
+    def stay_on_top(self):
+        """Windows and macOS sometimes drop the island behind other apps; put it (and settings) back on top."""
+        PLAT.look.keep_on_top(self, self.notch is not None)
+        if self.settings_win and self.settings_win.isVisible():
+            PLAT.look.keep_on_top(self.settings_win, self.notch is not None)
+
     def enterEvent(self, e):
+        self.stay_on_top()             # hovered: in front of everything, even if an app covered it
         self.hover_timer.start(self.cfg["hover_delay_ms"])
 
     def leaveEvent(self, e):
@@ -926,7 +1023,8 @@ class Island(QWidget):
         pct, _, reset = self.limit_state(key, now)
         name = "Session (5 h)" if key == "five_hour" else "Week"
         if pct is None:
-            lines = [f"{name} limit: unknown until the status line script runs"]
+            lines = [f"{name} limit: not known yet",
+                     "Turn on Settings > Startup > Show plan limits, then send a message in a chat"]
         elif reset:
             lines = [f"{name} limit: {pct:.0f}% used, resets in {fmt_dur(reset - now, coarse=True)}"]
         else:
@@ -991,7 +1089,7 @@ class Island(QWidget):
             if self.opening.x < 0.5:         # the small bar: jump to the chat that is busy
                 active = [s for s in self.sessions if s["status"] != "idle"] or self.sessions
                 if active:
-                    winctl.focus(active[0]["title"])
+                    winctl.focus(active[0]["title"], active[0]["pid"])
             return
         self.do(*hit, self.mapToGlobal(e.position().toPoint()))
 
@@ -1006,12 +1104,16 @@ class Island(QWidget):
             self.new_chat_menu(pos or self.mapToGlobal(self.pill.topRight().toPoint()))
         elif action == "settings":
             self.open_settings(toggle=True)
+        elif action == "quit":
+            if self.confirm and self.confirm[:2] == (None, "quit"):
+                return self.quit_by_user()
+            self.confirm = (None, "quit", time.time() + 4)
         elif action == "send":
             self.send_reply()
         elif action.startswith("limit:"):
             pass                             # a tooltip only
         elif s and (action in ("card", "usage") or action.startswith("agent:")):
-            winctl.focus(s["title"])
+            winctl.focus(s["title"], s["pid"])
         elif s and action.startswith("ans:"):
             self.answer(s, action[4:])
         elif s and self.confirm and self.confirm[:2] == (sid, action):   # second click on X or Compact
@@ -1040,7 +1142,8 @@ class Island(QWidget):
             K.Key_P: self.toggle_pin,
             K.Key_H: self.toggle_hide_all,
             K.Key_R: self.refresh,
-            K.Key_Q: QApplication.quit,
+            K.Key_Q: self.quit_by_user,
+            K.Key_W: self.toggle_island,
         }
         if ctrl and k in shortcuts:
             shortcuts[k]()
@@ -1168,8 +1271,14 @@ class Island(QWidget):
         qp.setRenderHint(QPainter.RenderHint.Antialiasing)
         qp.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         r, p = self.pill, clamp(self.opening.x)
-        shape = paint_frame(qp, r, self.RAD, NOTCH_BLACK if self.notch else BG, BG.alphaF(),
-                            snap=1 if self.springs_settled() else 4, flush_top=self.notch is not None)
+        if self.notch:
+            bg = NOTCH_BLACK
+        elif self.glassed:              # the blur shows through a lighter tint of the background colour
+            bg = QColor(BG.red(), BG.green(), BG.blue(), round(BG.alpha() * GLASS_TINT))
+        else:
+            bg = BG
+        shape = paint_frame(qp, r, self.RAD, bg, BG.alphaF(), snap=1 if self.springs_settled() else 4,
+                            flush_top=self.notch is not None, glass=self.glassed)
         qp.setClipPath(shape)
         self.hits = []
         bar_alpha = clamp(1 - p * 4)    # the bar's content is gone by p = 0.25, before the panel's appears
@@ -1192,7 +1301,7 @@ class Island(QWidget):
                 fade.setColorAt(0, BG)
                 fade.setColorAt(1, QColor(BG.red(), BG.green(), BG.blue(), 0))
                 qp.fillRect(QRectF(r.left(), edge, r.width(), 18), fade)
-        if self.working() and p < 0.5 and not self.cfg["reduce_motion"]:   # orange line running along the bar
+        if self.working() and p < 0.5 and not self.cfg["reduce_motion"] and not self.notch:   # orange line along the bar
             qp.setOpacity(1 - p * 2)
             seg = r.width() * 0.28
             x = r.left() + (((time.monotonic() - self.t0) * 0.55) % 1.0) * (r.width() + seg) - seg
@@ -1292,28 +1401,27 @@ class Island(QWidget):
         qp.setOpacity(base)
 
     def paint_notch_wings(self, qp, r):
-        """Docked and closed: the mascot left of the notch, the state right of it."""
+        """Docked and closed: the working mascot peeking out left of the notch, a dot right of it when a chat
+        needs you or just finished. Idle, the wings are folded away and only the notch is left."""
+        self.bar_pin = QRectF()
+        wing = (r.width() - self.notch.width()) / 2      # follows the width spring as the wings open
+        if wing < 12:
+            return
+        base = qp.opacity()
+        qp.setOpacity(base * clamp((wing - 12) / (NOTCH_WING - 12)))
         cy = r.top() + self.CH / 2
-        self.paint_mascot(qp, QPointF(r.left() + NOTCH_WING / 2, cy + 2), min(18, self.CH * 0.48), self.mascot_mode())
-        c = QPointF(r.right() - NOTCH_WING / 2, cy)
-        active = [s for s in self.sessions if s["status"] != "idle"]
-        pct = self.limit_state("five_hour", time.time())[0]
-        if pct is not None and not active:
-            draw_ring(qp, c, pct, min(8.0, self.CH * 0.22), limit_color(pct))
+        self.paint_mascot(qp, QPointF(r.left() + wing / 2 + 2, cy + 2), min(16, self.CH * 0.44), self.mascot_mode())
+        if any(s["status"] == "waiting" for s in self.sessions):
+            color = AMBER
+        elif self.toast and self.toast[0] == "done":
+            color = GREEN
         else:
-            if any(s["status"] == "waiting" for s in active):
-                color = AMBER
-            elif active:
-                color = CLAUDE
-            elif self.toast and self.toast[0] == "done":
-                color = GREEN
-            else:
-                color = DIM
+            color = None
+        if color is not None:
             qp.setPen(Qt.PenStyle.NoPen)
             qp.setBrush(color)
-            qp.drawEllipse(QPointF(c.x() - 9, cy), 3.5, 3.5)
-            self.draw_text(qp, c.x() - 3, cy - 9, 24, 18, str(len(active) or len(self.sessions)), self.f_small, WHITE)
-        self.bar_pin = QRectF()
+            qp.drawEllipse(QPointF(r.right() - wing / 2 - 2, cy), 4, 4)
+        qp.setOpacity(base)
 
     def reveal(self, qp, r, y, h):
         """Fade and raise one panel block as the panel opens, blocks nearest the bar first."""
@@ -1362,12 +1470,13 @@ class Island(QWidget):
                            Qt.AlignmentFlag.AlignHCenter)
 
     def paint_header(self, qp, x0, y, width):
-        """Mascot on the left; settings, new chat, hide all and pin on the right."""
+        """Mascot on the left; quit, settings, new chat, hide all and pin on the right."""
         pin_c = QPointF(x0 + width - 8, y + 12)
+        quit_c = QPointF(pin_c.x() - 106, pin_c.y())
         gear_c = QPointF(pin_c.x() - 80, pin_c.y())
         plus_c = QPointF(pin_c.x() - 54, pin_c.y())
         eye_c = QPointF(pin_c.x() - 28, pin_c.y())
-        for c, action in ((gear_c, "settings"), (plus_c, "newchat"), (eye_c, "hideall")):
+        for c, action in ((quit_c, "quit"), (gear_c, "settings"), (plus_c, "newchat"), (eye_c, "hideall")):
             self.hits.append((QRectF(c.x() - 11, c.y() - 9, 22, 18), action, None))
         self.hits.append((QRectF(pin_c.x() - 12, pin_c.y() - 10, 24, 20), "pin", None))
         over = self.hover_hit[0] if self.hover_hit and self.hover_hit[1] is None else None
@@ -1378,6 +1487,8 @@ class Island(QWidget):
             eye_color = WHITE_220
         else:
             eye_color = ICON
+        asking = bool(self.confirm and self.confirm[:2] == (None, "quit"))
+        draw_power(qp, quit_c, 12, CLOSE_RED if asking or over == "quit" else ICON, filled=asking)
         draw_gear(qp, gear_c, 12, CLAUDE_LIGHT if over == "settings" else ICON)
         draw_plus(qp, plus_c, 11, CLAUDE_LIGHT if over == "newchat" else ICON)
         draw_eye(qp, eye_c, 13, eye_color, slashed=hidden)
@@ -1604,7 +1715,10 @@ def main():
         sys.stdout = sys.stderr = open(log, "a", encoding="utf-8", buffering=1)
         print(time.strftime("--- %Y-%m-%d %H:%M:%S started"), " ".join(sys.argv[1:]))
     app = QApplication(sys.argv)
+    app.setApplicationName("Claude Island")
+    app.setApplicationDisplayName("Claude Island")
     app.setQuitOnLastWindowClosed(False)
+    PLAT.look.app_identity(app)          # a widget, not a "Python" app in the Dock or taskbar
 
     def give_chats_back():               # never leave a chat window hidden behind us
         winctl.show_all(HIDDEN_FILE)

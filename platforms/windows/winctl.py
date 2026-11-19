@@ -154,7 +154,7 @@ def _bring_front(h):
         user32.SwitchToThisWindow(h, True)
 
 
-def focus(title):
+def focus(title, pid=None):
     """Bring the chat's terminal to the front, un-hiding it. False if only a tab switch could be tried."""
     h = find_window(title)
     if h:
@@ -304,10 +304,13 @@ def answer_other(title, n_options, text):
     return _in_front(title, keys)
 
 
-def hide_all(titles, path=None):
-    """Hide these chats' windows from screen and taskbar, except windows that hold other tabs too."""
+def hide_all(chats, path=None):
+    """Hide these chats' windows from screen and taskbar, except windows that hold other tabs too.
+
+    chats: [(title, pid)]; windows are found by title here.
+    """
     counts = tab_counts()
-    for t in titles:
+    for t, _pid in chats:
         h = find_window(t, strict=True)
         if h and h not in HIDDEN and user32.IsWindowVisible(h) and _single_tab(h, counts):
             user32.ShowWindow(h, SW_HIDE)

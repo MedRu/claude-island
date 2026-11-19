@@ -5,4 +5,4 @@
 # Run it by hand to start the widget alone; Claude Code hooks add --hook.
 # Uses python3 from PATH, or the interpreter named in $PYTHON. It needs PySide6.
 here="$(cd "$(dirname "$0")" && pwd)"
-nohup "${PYTHON:-python3}" "$here/island.py" "$@" >/dev/null 2>&1 &
+exec "${PYTHON:-python3}" "$here/island.py" --detach "$@"

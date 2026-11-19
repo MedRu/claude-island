@@ -6,7 +6,7 @@
     PLAT = get_platform()
     PLAT.winctl.focus(title)
 
-Each module (winctl, proc, sound, instance, autostart, look) is imported the first time it is used. The OS comes
+Each module (winctl, proc, sound, instance, autostart, look, hotkey) is imported the first time it is used. The OS comes
 from sys.platform, and ISLAND_PLATFORM=windows|macos|linux overrides it. Importing this package never loads Qt,
 so island.py can check for a running copy cheaply.
 """
@@ -15,7 +15,7 @@ import os
 import sys
 
 NAMES = ("windows", "macos", "linux")
-MODULES = ("winctl", "proc", "sound", "instance", "autostart", "look")
+MODULES = ("winctl", "proc", "sound", "instance", "autostart", "look", "hotkey")
 _current = None
 
 
