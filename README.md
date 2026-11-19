@@ -89,6 +89,28 @@ After you quit, prompts in chats that are already open do not bring it back; a n
 hooks are on), and so does starting it yourself. From a terminal, `island.py --toggle` hides or shows the
 running widget and `island.py --quit` quits it.
 
+### Command line (Windows, macOS, Linux)
+
+`cli.py` runs, stops and checks the widget from any terminal, without loading Qt:
+
+| Command | What it does |
+|---|---|
+| `claude-island start` | start it, or bring it on screen when it already runs |
+| `claude-island stop` | ask it to quit, like Quit in its menu (waits up to 10 s) |
+| `claude-island restart` | stop, then start |
+| `claude-island kill` | end it at once, then show again any chat windows it had hidden |
+| `claude-island status` | running or not, its process id and since when (exit code 3 when not running) |
+| `claude-island toggle` / `show` | hide or show it / bring it on screen |
+| `claude-island doctor` | start hooks and plan limits, for a bug report |
+
+Without installing, use `python cli.py <command>` (`python3` on macOS and Linux) in this folder.
+`python cli.py install` puts it in your Claude folder: a `claude-island` command in `~/.claude/bin`
+(`claude-island.cmd` too on Windows), that folder on your PATH (the user PATH on Windows, your `~/.zshrc` or
+`~/.bashrc` elsewhere; new terminals see it), and an **/island** slash command in `~/.claude/commands`, so
+`/island status` or `/island restart` works inside Claude Code. Run install with the Python that runs the
+widget (on macOS and Linux, the `.venv` one if you made it). `python cli.py uninstall` takes all of it away.
+The macOS and Linux side of the command line has not been tried on real hardware yet.
+
 The widget keeps running with or without chats, unless you set Settings, Startup, "Quit after N minutes"
 (0, the default, means never). When it was started by a hook and is not pinned, it hides while nothing is
 working; the tray icon stays.
@@ -395,6 +417,7 @@ cannot be told apart from the chat's own process. Contributions are welcome.
 | File | Role |
 |---|---|
 | `island.py` | the widget: state, layout, mouse, painting of the bar, panel and cards |
+| `cli.py` | the command line: start, stop, restart, kill, status, toggle, doctor, install into `~/.claude` |
 | `drawing.py` | colours, fonts, the spring behind every animation, cached frame and shadow, icons and the pixel mascot |
 | `settings.py` | defaults, load and save, the start hooks in `~/.claude/settings.json` |
 | `settings_ui.py` | the settings window |

@@ -6,6 +6,7 @@ config/*.flag
 config/quit.mark
 config/statusline_before.json
 config/statusline_off.mark
+config/island.pid
 config/island.log
 config/island.lock
 

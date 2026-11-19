@@ -47,6 +47,23 @@ QUIT_MARK.unlink(missing_ok=True)
 import math
 import os
 
+# The running copy's process id, for `claude-island status` and `claude-island kill` (cli.py).
+PID_FILE = CONFIG_DIR / "island.pid"
+CONFIG_DIR.mkdir(exist_ok=True)
+PID_FILE.write_text(str(os.getpid()), encoding="ascii")
+
+
+def _drop_pid_file():
+    try:
+        if PID_FILE.read_text(encoding="ascii").strip() == str(os.getpid()):
+            PID_FILE.unlink()
+    except OSError:
+        pass
+
+
+import atexit
+atexit.register(_drop_pid_file)
+
 # Linux on Wayland: an app may not place its own windows there, so the island (docked or floating) would land
 # anywhere. Run it through XWayland instead when that is available and you did not pick a Qt platform yourself.
 if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY")         and not os.environ.get("QT_QPA_PLATFORM"):
