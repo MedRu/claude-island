@@ -399,17 +399,36 @@ class Feed:
         return running + [a for a in agents if not a["running"]][:AGENTS_KEPT]
 
     def _limits(self):
-        """Plan limits from the newest status line that has them, re-read only when a file changed."""
+        """Plan limits merged from every chat's status line, re-read only when a file changed.
+
+        Each chat's file holds the limits from that chat's last reply, and an idle chat keeps rewriting its
+        file (the status line refreshes on a timer), so the newest file is often the stalest reading. Instead,
+        per limit, the latest window wins, and within one window the highest use, since use only grows.
+        """
         files = sorted(((_mtime(f), f) for f in STATUS_DIR.glob("*.json")), reverse=True)
         if files != self.limits_key:
             self.limits_key = files
-            self.limits = None
+            merged = {}
             for _, f in files:
-                found = (read_json(f) or {}).get("rate_limits")
-                if found:
-                    self.limits = found
-                    break
+                found = as_dict((read_json(f) or {}).get("rate_limits"))
+                for key, reading in found.items():
+                    if isinstance(reading, dict) and reading.get("used_percentage") is not None:
+                        merged[key] = _fresher(merged.get(key), reading)
+            self.limits = merged or None
         return self.limits
+
+
+SAME_WINDOW_S = 600       # resets_at of two readings this close: the same limit window
+
+
+def _fresher(a, b):
+    """The more recent of two readings of one limit ({"used_percentage", "resets_at"}); a may be None."""
+    if a is None:
+        return b
+    ra, rb = a.get("resets_at") or 0, b.get("resets_at") or 0
+    if abs(ra - rb) > SAME_WINDOW_S:
+        return a if ra > rb else b
+    return a if float(a["used_percentage"]) >= float(b["used_percentage"]) else b
 
 
 def _usage(line):
