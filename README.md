@@ -112,8 +112,10 @@ Without installing, use `python cli.py <command>` (`python3` on macOS and Linux)
 widget (on macOS and Linux, the `.venv` one if you made it). `python cli.py uninstall` takes all of it away.
 The macOS and Linux side of the command line has not been tried on real hardware yet.
 
-The widget keeps running with or without chats, unless you set Settings, Startup, "Quit after N minutes"
-(0, the default, means never). When it was started by a hook and is not pinned, it hides while nothing is
+With the start hooks on, every new Claude Code chat starts the widget, or pops it up when it already runs:
+"New chat" shows on the bar for a few seconds. Settings, Startup, **When the last chat closes** decides what
+happens after: **Close** (the default) quits it a few seconds after the last chat closes, and the next chat
+starts it again; **Keep idle** keeps it running, until "Quit after N minutes" without a chat (0 means never). When it was started by a hook and is not pinned, it hides while nothing is
 working; the tray icon stays.
 
 ## Status line setup

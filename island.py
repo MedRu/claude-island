@@ -125,6 +125,8 @@ WIN_OPEN_W, WIN_OPEN_H = (190.0, 0.72), (140.0, 0.68)
 WIN_CLOSE_W, WIN_CLOSE_H = (170.0, 0.88), (260.0, 0.98)
 WIN_STICK = 140                       # Windows: px a drag must pull away from the dock before it lets go
 NOTCH_BLACK = QColor(0, 0, 0)
+LAST_CHAT_GRACE_S = 3                 # "close with the last chat": how long no chat must last before it quits
+NEW_CHAT_TOAST_S = 4                  # a new chat shows the island this long, even when nothing works yet
 GLASS_TINT = 0.6                      # share of the background colour painted over the macOS glass
 LIQUID_TINT = 0.3                     # the same over Liquid Glass (macOS 26), already dark and frosted
 AGENT_ROW_H = 18                      # one sub-agent under its chat's card
@@ -348,6 +350,10 @@ class Island(QWidget):
         self.attention = set()         # waiting chats that opened the panel by themselves
         self.limit_marks = None        # key -> (highest warning mark reached, resets_at)
         self.last_alive = self.last_activity = time.time()
+        self.had_chats = False         # a chat was open at some point in this run
+        self.no_chat_since = None      # when the last chat closed, for "close with the last chat"
+        # started by a chat's SessionStart hook: that new chat is shown on the first refresh
+        self.greet_new_chat = "--hook" in sys.argv and "--on-prompt" not in sys.argv
 
         self.opening = Spring(0.0, 158, 0.82)                  # 0 = small bar, 1 = panel
         self.panel_height = Spring(200, 200, 0.9, eps=0.3)
@@ -567,8 +573,8 @@ class Island(QWidget):
             self.confirm = None
         if self.sessions:
             self.last_alive = now
-        if self.idle_too_long(now):
-            QApplication.quit()
+        if self.idle_too_long(now) or self.last_chat_closed(now):
+            QApplication.quit()        # not quit_by_user: the next chat starts it again
             return
         if not self.dragging:
             self.follow_notch()
@@ -619,6 +625,20 @@ class Island(QWidget):
                 return True
         return False
 
+    def last_chat_closed(self, now):
+        """Settings > When the last chat closes = Close: a chat was open in this run, and none has been for a
+        moment (so closing one chat and opening another does not flicker it away)."""
+        if self.sessions:
+            self.had_chats, self.no_chat_since = True, None
+            return False
+        if self.cfg.get("when_last_chat_closes", "quit") != "quit" or not self.had_chats:
+            return False
+        if self.no_chat_since is None:
+            self.no_chat_since = now
+        if (self.settings_win and self.settings_win.isVisible()) or self.previewing() or self.dragging:
+            return False               # you are working on it: wait until you are done
+        return now - self.no_chat_since >= LAST_CHAT_GRACE_S
+
     def idle_too_long(self, now):
         """No chat for quit_after_min minutes, and nothing asks us to stay."""
         quit_after = self.cfg["quit_after_min"] * 60
@@ -629,10 +649,15 @@ class Island(QWidget):
     def notice_changes(self, now):
         """Toast and play a sound when a chat finished, needs you or got to work since the last refresh."""
         cues = set()
+        if self.prev_status is None and self.greet_new_chat and self.sessions:
+            newest = max(self.sessions, key=lambda x: x.get("since") or 0)
+            self.toast = ("new", newest["title"], now + NEW_CHAT_TOAST_S)
         if self.prev_status is not None:   # the first refresh only records where things stand
             for s in self.sessions:
                 was = self.prev_status.get(s["sid"])
-                if was == "busy" and s["status"] == "idle":
+                if was is None and s["status"] == "idle":   # a chat just opened
+                    self.toast = ("new", s["title"], now + NEW_CHAT_TOAST_S)
+                elif was == "busy" and s["status"] == "idle":
                     self.toast = ("done", s["title"], now + 6)
                     cues.add("done")
                 elif was != "waiting" and s["status"] == "waiting":
@@ -957,7 +982,7 @@ class Island(QWidget):
     def notch_wing(self):
         """Docked and closed, the island is the notch alone, with a small wing for the mascot while there is
         news: a chat working or waiting, or one that just finished."""
-        busy = self.working() or self.attention or (self.toast and self.toast[0] in ("done", "waiting"))
+        busy = self.working() or self.attention or (self.toast and self.toast[0] in ("done", "waiting", "new"))
         if not busy:
             return 0
         return WIN_WING if EDGE_DOCK else NOTCH_WING
@@ -1763,6 +1788,8 @@ class Island(QWidget):
         active = [s for s in self.sessions if s["status"] != "idle"]
         waiting = [s for s in active if s["status"] == "waiting"]
         done = self.toast[1] if self.toast and self.toast[0] == "done" else None
+        if self.toast and self.toast[0] == "new" and not active:
+            return self.toast[1], "New chat", CLAUDE_LIGHT
         if len(active) == 1:
             s = active[0]
             if waiting:

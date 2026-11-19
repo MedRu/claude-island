@@ -639,5 +639,9 @@ class SettingsWindow(QWidget):
                    "tray menu; sounds still play."]
                   if get_platform().hotkey.LABEL else []),
                 ("Open when Claude needs you", self.toggle("auto_open")),
+                ("When the last chat closes", self.segmented("when_last_chat_closes",
+                                                              [("quit", "Close"), ("idle", "Keep idle")])),
+                "~Close: the island quits a few seconds after the last Claude Code chat closes, and the next chat "
+                "starts it again. Keep idle: it stays, and quits only after the time below.",
                 ("Quit after no chat for", self.number("quit_after_min", 0, 600, 5, " min")),
                 "~0 min = never: it keeps running with or without Claude chats."]

@@ -63,6 +63,7 @@ DEFAULTS = {
     "show_when_started_by_hand": True,
     "global_hotkey": True,          # Ctrl+Alt+I (⌃⌥I on macOS) hides and shows the island from any app
     "quit_after_min": 0,            # 0 keeps it running with no chat
+    "when_last_chat_closes": "quit",  # "quit": close with the last Claude Code chat; "idle": keep it running
     "dx": 12,
     "dy": 12,
     "notch": False,                 # macOS: docked in the camera notch
