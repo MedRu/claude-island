@@ -41,6 +41,7 @@ Not affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropi
 - **macOS notch dock.** On a MacBook with a camera notch, the bar can dock into the notch.
 - **Edge dock on Windows and Linux.** The bar docks as a small notch-style tab on the top edge, just above the
   taskbar, or upright on the left or right side, anywhere along that edge.
+- **Side dock on macOS.** Besides the notch, the bar docks as the same upright tab on the left or right side.
 
 ## Requirements
 
@@ -306,6 +307,11 @@ slides over to stay on screen while the tab stays put. On Linux this needs X11; 
 through XWayland when it is there, because Wayland does not let an app place its own windows. Linux has not
 been tested on real hardware yet.
 
+On macOS the top belongs to the notch dock, unchanged, and there is no taskbar dock; the left and right sides
+take the same upright tab (Settings > Startup > Staying > **Side dock**, **Side position**, **Side tab length**,
+or drag the bar to a side). Pull it away from the side to float again, or drag it to the notch as before.
+This has only been tried with a simulated macOS on Windows so far, not on a real Mac.
+
 ### Transitions
 
 The window is resized once per transition, and the transparent extra space lets clicks through, so only the
@@ -369,7 +375,7 @@ Everything that touches the operating system lives in `platforms/<os>/`; the res
 | Start with Claude (hooks) | yes | yes | yes |
 | Menu entry | Start menu | `~/Applications/Claude Island.app` | applications menu (`~/.local/share/applications/claude-island.desktop`) |
 | Notch dock | no | yes (untested on real hardware) | no |
-| Edge dock (top, taskbar, sides) | yes | no (notch dock instead) | yes (X11 / XWayland, untested on real hardware) |
+| Edge dock (top, taskbar, sides) | yes | sides only, the top is the notch dock (untested on real hardware) | yes (X11 / XWayland, untested on real hardware) |
 | Glass background | no | yes (pyobjc) | no |
 | Click a card to focus its terminal | yes | the app, and the tab in Terminal and iTerm2 | no |
 | Allow / Deny / answers / reply box / Compact | yes | no | no |
@@ -411,3 +417,8 @@ cannot be told apart from the chat's own process. Contributions are welcome.
 MIT, see [LICENSE](LICENSE).
 
 Author: Mohamed HAMANA ([github.com/MedRu](https://github.com/MedRu))
+
+Contributors:
+- magrihalah ([github.com/magrihalah](https://github.com/magrihalah)): macOS - tested on a real Mac, Liquid
+  Glass, the companion pill beside the notch, typing answers into Terminal and iTerm2, smoother drag, tooltips
+  and notch motion.

@@ -94,7 +94,10 @@ NOTCH_EAR = 8                         # docked: how far the top corners flare ou
 TOP_DOCK_W = 184                      # screens with no notch: the island docks into a notch of its own
 # Windows and Linux have no camera notch: the island docks on a screen edge of your choice instead (win_dock):
 # the top edge, above the taskbar or panel, or the left or right side. macOS keeps its notch dock.
-EDGE_DOCK = sys.platform == "win32" or sys.platform.startswith("linux")
+EDGE_DOCK = PLAT.name in ("windows", "linux")
+# macOS keeps its notch dock on top; the left and right sides of the screen are free, so the same upright side tab
+# as on Windows can dock there (win_dock "left" / "right"). No taskbar dock on macOS.
+MAC_SIDES = PLAT.name == "macos"
 WIN_DOCK_H = 32                       # Windows: height of the docked bar
 WIN_DOCK_W = 72                       # Windows: width of the docked bar when idle (just a handle to hover)
 WIN_WING = 30                         # Windows: px each side of it for the mascot and the dot while Claude works
@@ -395,6 +398,10 @@ class Island(QWidget):
         self.W, self.RAD = int(c["width"]), int(c["corner_radius"])
         if EDGE_DOCK:
             self.apply_win_dock()
+        elif MAC_SIDES and c.get("win_dock") in ("left", "right"):   # macOS side tab, instead of the notch
+            c["notch"] = False
+            if not self.dragging:
+                self.dock(self.notch_of(self.screen()))
         else:
             # Companion and notch modes both dock to the camera notch; turning both off undocks again.
             should_dock = bool(c.get("companion") or c["notch"])
@@ -676,7 +683,7 @@ class Island(QWidget):
 
     def companion(self):
         """Companion mode: a small Claude pill always beside a real camera notch, not over it."""
-        return bool(self.cfg.get("companion")) and self.notch is not None
+        return bool(self.cfg.get("companion")) and self.notch is not None and not self.dock_side
 
     def has_news(self):
         """Something worth a compact notification: a chat working, waiting, or one that just finished."""
@@ -924,7 +931,7 @@ class Island(QWidget):
     def notch_pad(self):
         """Docked under a real camera notch, the panel starts below it, so no button hides behind the camera."""
         n = self.notch
-        if not n:
+        if not n or self.dock_side:
             return 0
         if getattr(self, "_pad_for", None) != n:            # asking AppKit every frame is too slow
             self._pad_for, self._pad = n, max(0, n.height() - 6) if PLAT.look.notch_rect(self.screen()) else 0
@@ -945,9 +952,9 @@ class Island(QWidget):
         self.notch = rect
         self.dock_bottom = EDGE_DOCK and rect is not None and self.cfg.get("win_dock") == "bottom"
         side = self.cfg.get("win_dock")
-        self.dock_side = side if EDGE_DOCK and rect is not None and side in ("left", "right") else None
+        self.dock_side = side if (EDGE_DOCK or MAC_SIDES) and rect is not None and side in ("left", "right") else None
         self.size_bar()
-        PLAT.look.keep_on_top(self, bool(rect))
+        PLAT.look.keep_on_top(self, bool(rect) and not self.dock_side)
         if rect:
             self.grow_down = not self.dock_bottom
         self.apply_hover()
@@ -959,6 +966,8 @@ class Island(QWidget):
 
         Docked there, the island is a black pill hanging from the top edge, like Alcove on a Mac without notch.
         """
+        if screen is not None and MAC_SIDES and self.cfg.get("win_dock") in ("left", "right"):
+            return self.win_dock_rect(screen, self.cfg["win_dock"])
         n = PLAT.look.notch_rect(screen)
         if n is not None or screen is None:
             return n
@@ -1037,6 +1046,34 @@ class Island(QWidget):
             self.notch = None          # a new place (or edge): dock() sets it all up again
             self.dock(n)
 
+    def snap_to_mac_side(self, cursor):
+        """macOS, while dragging: near the left or right side of the screen the bar docks there as an upright tab,
+        anywhere along it, and slides with the cursor; it lets go when pulled WIN_STICK px away. True while the
+        sides own the bar, so the notch logic is skipped; False lets the notch logic run as before."""
+        screen = QGuiApplication.screenAt(cursor) or self.screen()
+        if not screen:
+            return False
+        a = screen.availableGeometry()
+        dist = {"left": cursor.x() - a.left(), "right": a.right() - cursor.x()}
+        edge = min(dist, key=dist.get)
+        if dist[edge] > NOTCH_SNAP:
+            edge = None
+        current = self.dock_side
+        if current and dist[current] <= WIN_STICK and (edge is None or dist[edge] >= dist[current] - 4):
+            edge = current
+        if edge is None:
+            if current:                # pulled off the side: float, and the notch can take it from here
+                self.cfg["win_dock"] = "off"
+                self.dock(None)
+            return False
+        pos = self.win_pos_at(screen, cursor.y(), vertical=True)
+        self.cfg["win_dock"], self.cfg["win_dock_pos"] = edge, pos
+        n = self.win_dock_rect(screen, edge, pos)
+        if self.notch != n:
+            self.notch = None
+            self.dock(n)
+        return True
+
     def follow_notch(self):
         """After a screen change, dock into the notch (or top centre) of the screen we are now on."""
         if self.notch is None and not self.cfg["notch"]:
@@ -1050,6 +1087,8 @@ class Island(QWidget):
         """
         if EDGE_DOCK:
             return self.snap_to_win_dock(cursor)
+        if MAC_SIDES and self.snap_to_mac_side(cursor):
+            return
         n = self.notch_of(self.screen())
         if not n:
             return
@@ -1206,6 +1245,7 @@ class Island(QWidget):
         if self.geometry().getRect() != (x, int(y), outer_w, outer_h):
             self.setGeometry(x, int(y), outer_w, outer_h)
         self.pill = QRectF(pill_x, pill_y, width, h)
+        self.sync_glass()              # macOS: take the glass away while docked, like in the notch
 
     def paint_side_dock_bar(self, qp, r):
         """Docked on a side, closed: the mascot stands in the tab; while a chat works the tab grows longer, the
@@ -1264,9 +1304,10 @@ class Island(QWidget):
         """
         if raise_front is None:
             raise_front = self.wants_front()
-        PLAT.look.keep_on_top(self, self.notch is not None, raise_front=raise_front)
+        in_notch = self.notch is not None and not self.dock_side
+        PLAT.look.keep_on_top(self, in_notch, raise_front=raise_front)
         if self.settings_win and self.settings_win.isVisible():
-            PLAT.look.keep_on_top(self.settings_win, self.notch is not None)
+            PLAT.look.keep_on_top(self.settings_win, in_notch)
 
     def enterEvent(self, e):
         self.stay_on_top()             # hovered: in front of everything, even if an app covered it
@@ -1304,7 +1345,7 @@ class Island(QWidget):
         if want != self.opening.target:
             if want and self.opening.x < 0.05:
                 self.panel_height.target = self.panel_height.x = self.expanded_height(decide=True)
-            if EDGE_DOCK and self.notch is not None:     # docked on Windows: Dynamic Island motion
+            if self.notch is not None and (EDGE_DOCK or self.dock_side):   # edge or side dock: Dynamic Island
                 mode = "open" if want else "close"
                 self.bar_width.tune(*self.win_springs[mode + "_w"])
                 self.opening.tune(*self.win_springs[mode + "_h"])
@@ -1418,7 +1459,7 @@ class Island(QWidget):
             clickable = hit and not hit[0].startswith("limit:")   # the limit pills only have a tooltip
             self.setCursor(Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor)
             tip = self.tooltip(*hit) if hit else None
-            self.tip.show_text(QCursor.pos(), tip, self.notch is not None)
+            self.tip.show_text(QCursor.pos(), tip, self.notch is not None and not self.dock_side)
             self.update()
         if self.opening.target == 0.0 and hit != ("pin", "bar"):
             self.hover_timer.start(self.cfg["hover_delay_ms"])   # moved off the bar's pin: open after a rest
@@ -1430,8 +1471,16 @@ class Island(QWidget):
         if self.dragging:
             self.dragging = False
             self.cfg["notch"] = self.notch is not None
+            if MAC_SIDES:
+                self.cfg["notch"] = self.notch is not None and not self.dock_side
+                self.cfg["win_dock"] = self.dock_side or "off"
             if EDGE_DOCK:
-                self.cfg["win_dock"] = ("bottom" if self.dock_bottom else "top") if self.notch else "off"
+                if self.notch is None:
+                    self.cfg["win_dock"] = "off"
+                elif self.dock_side:       # left or right: keep the side it was dropped on
+                    self.cfg["win_dock"] = self.dock_side
+                else:
+                    self.cfg["win_dock"] = "bottom" if self.dock_bottom else "top"
             settings.save(self.cfg)
             return self.apply_hover()
         hit = self.hit_at(e.position())
@@ -1527,7 +1576,8 @@ class Island(QWidget):
         elif k == K.Key_Delete and cur:
             self.do("close", cur)              # like the X, the first press only asks
         elif k in (K.Key_F1, K.Key_Question):
-            self.tip.show_text(self.mapToGlobal(self.pill.topLeft().toPoint()), KEYS_HELP, self.notch is not None)
+            self.tip.show_text(self.mapToGlobal(self.pill.topLeft().toPoint()), KEYS_HELP,
+                               self.notch is not None and not self.dock_side)
         else:
             return super().keyPressEvent(e)
         self.apply_hover()
@@ -1842,7 +1892,7 @@ class Island(QWidget):
         a = ease_out((clamp(self.opening.x) - 0.30 - 0.28 * from_bar) / 0.40)
         qp.setOpacity(a)
         qp.translate(0, (1 - a) * 10)
-        if EDGE_DOCK and self.notch is not None:   # Dynamic Island: each block also grows in from 92 % of its size
+        if self.notch is not None and (EDGE_DOCK or self.dock_side):   # each block grows in from 92 % of its size
             k = 0.92 + 0.08 * a
             qp.translate(r.center().x(), mid)
             qp.scale(k, k)
