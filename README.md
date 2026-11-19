@@ -103,9 +103,10 @@ running widget and `island.py --quit` quits it.
 | `claude-island toggle` / `show` | hide or show it / bring it on screen |
 | `claude-island doctor` | start hooks and plan limits, for a bug report |
 
+**`cc-island` is the short name** for the same thing: `cc-island start`, `cc-island stop`, `cc-island status`...
 Without installing, use `python cli.py <command>` (`python3` on macOS and Linux) in this folder.
-`python cli.py install` puts it in your Claude folder: a `claude-island` command in `~/.claude/bin`
-(`claude-island.cmd` too on Windows), that folder on your PATH (the user PATH on Windows, your `~/.zshrc` or
+`python cli.py install` puts it in your Claude folder: `claude-island` and `cc-island` commands in `~/.claude/bin`
+(`.cmd` ones too on Windows), that folder on your PATH (the user PATH on Windows, your `~/.zshrc` or
 `~/.bashrc` elsewhere; new terminals see it), and an **/island** slash command in `~/.claude/commands`, so
 `/island status` or `/island restart` works inside Claude Code. Run install with the Python that runs the
 widget (on macOS and Linux, the `.venv` one if you made it). `python cli.py uninstall` takes all of it away.

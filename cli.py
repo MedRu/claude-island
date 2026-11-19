@@ -13,6 +13,7 @@
     claude-island install    put the claude-island command and an /island slash command in ~/.claude
     claude-island uninstall  take them away again
 
+`cc-island` is the short name: `cc-island start` is `claude-island start`, and so on.
 `python cli.py <command>` works without installing. Qt is never loaded here, so every command returns quickly.
 """
 import os
@@ -35,7 +36,8 @@ BIN = CLAUDE_HOME / "bin"
 SLASH = CLAUDE_HOME / "commands" / "island.md"
 WINDOWS = platform_name() == "windows"
 RC_MARK = "# Claude Island command line (claude-island install)"
-COMMANDS = ("start", "stop", "restart", "kill", "status", "toggle", "show", "doctor", "install", "uninstall")
+NAMES = ("claude-island", "cc-island")   # the command, and its short name
+COMMANDS = ("start","stop", "restart", "kill", "status", "toggle", "show", "doctor", "install", "uninstall")
 
 
 # ----------------------------------------------------------------- is it running
@@ -271,30 +273,32 @@ def console_python():
 def install():
     BIN.mkdir(parents=True, exist_ok=True)
     py, cli = console_python(), (HERE / "cli.py").as_posix()
-    shell = BIN / "claude-island"
-    shell.write_text(f'#!/bin/sh\n# Claude Island command line, written by `claude-island install`\n'
-                     f'exec "{py}" "{cli}" "$@"\n', encoding="utf-8", newline="\n")
-    shell.chmod(0o755)
-    written = [shell]
-    if WINDOWS:
-        cmd = BIN / "claude-island.cmd"
-        cmd.write_text(f'@echo off\r\nrem Claude Island command line, written by `claude-island install`\r\n'
-                       f'"{Path(py)}" "{Path(cli)}" %*\r\n', encoding="utf-8", newline="")
-        written.append(cmd)
+    written = []
+    for name in NAMES:                 # the long name and the short one run the same command line
+        shell = BIN / name
+        shell.write_text(f'#!/bin/sh\n# Claude Island command line, written by `claude-island install`\n'
+                         f'exec "{py}" "{cli}" "$@"\n', encoding="utf-8", newline="\n")
+        shell.chmod(0o755)
+        written.append(shell)
+        if WINDOWS:
+            cmd = BIN / f"{name}.cmd"
+            cmd.write_text(f'@echo off\r\nrem Claude Island command line, written by `claude-island install`\r\n'
+                           f'"{Path(py)}" "{Path(cli)}" %*\r\n', encoding="utf-8", newline="")
+            written.append(cmd)
     SLASH.parent.mkdir(parents=True, exist_ok=True)
-    shim = shell.as_posix()
+    shim = (BIN / NAMES[0]).as_posix()
     shim = shim if " " not in shim else f'"{shim}"'      # quoted only when it must be, so the permission matches
     SLASH.write_text(SLASH_COMMAND.format(shim=shim), encoding="utf-8", newline="\n")
     written.append(SLASH)
     for path in written:
         print(f"wrote {path}")
     print(add_to_path())
-    print("Then: claude-island status   (and /island status inside Claude Code)")
+    print("Then: claude-island status, or the short cc-island status   (and /island status inside Claude Code)")
     return 0
 
 
 def uninstall():
-    for path in (BIN / "claude-island", BIN / "claude-island.cmd", SLASH):
+    for path in [BIN / n for n in NAMES] + [BIN / f"{n}.cmd" for n in NAMES] + [SLASH]:
         if path.exists():
             path.unlink()
             print(f"removed {path}")
