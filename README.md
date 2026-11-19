@@ -96,7 +96,11 @@ Chat cards work without any extra setup. The limit pills, cost and the exact con
 piece: Claude Code only exposes plan limits to the status line command, which receives a JSON document on
 stdin. Without it the limit pills show "–".
 
-**The easy way:** in Settings, under Startup, turn on **Show plan limits and cost**. This sets Claude Code's
+**Automatic:** when Claude Code has no status line yet, the island sets this one up the first time it starts,
+and repairs it later if Python or the island folder moves. A status line of your own is never replaced
+automatically.
+
+**The switch:** in Settings, under Startup, turn on **Show plan limits and cost**. This sets Claude Code's
 status line to `statusline/island_statusline.py`, which saves that JSON to `~/.claude/island/<session_id>.json`
 for the widget and prints the model and context %. If you already had a status line, it keeps running and its
 output is what you see: the island script calls it with the same input. Turning the switch off puts your own
@@ -114,7 +118,13 @@ the next message in a chat, and refresh whenever a chat's status line refreshes.
 }
 ```
 
-To keep your own status line, append `--then-b64 <your command, base64-encoded>`. The older shell scripts
+To keep your own status line, append `--then-b64 <your command, base64-encoded>`.
+
+**Limits still missing?** Hover the "–" in a limit pill: the tooltip says what is missing. Or run
+`python3 island.py --doctor` (on Windows `python island.py --doctor`), which prints the Claude Code folder, the
+start hooks, the status line command, the newest status file and whether it holds limits. Claude Code only
+sends plan limits when you are logged in with a Claude Pro or Max subscription (not an API key), after the
+first reply in a session. `CLAUDE_CONFIG_DIR` is honoured when Claude Code uses another folder. The older shell scripts
 `island-statusline.ps1` (Windows) and `island-statusline.sh` still work and are recognised by the switch.
 
 ## Using it
@@ -263,10 +273,12 @@ started). Mute them from the right-click menu. The sounds are synthesised by `so
 `config/sounds/` and rebuilt automatically when the sound design changes (`VERSION` in that file).
 `python sounds.py` rebuilds and plays them.
 
-### macOS notch dock
+### Top dock (macOS notch, any screen)
 
-On a MacBook with a camera notch, drag the bar to the top centre of the screen: near the notch it docks into
-it. Docked, it hangs from the top edge in the notch's black. While nothing happens it is the notch alone;
+Drag the bar to the top centre of the screen and it docks there, in the style of Alcove and the iPhone's
+Dynamic Island: a black pill hanging from the top edge, its top corners flaring into the edge like the camera
+notch, with round bottom corners that grow softer as it opens. On a MacBook with a notch it wraps the notch;
+on other screens (and on Windows) it makes a notch-sized pill of its own at the top centre. Docked, it hangs from the top edge in the notch's black. While nothing happens it is the notch alone;
 while Claude works, the mascot peeks out on a small wing at the left, with a dot on the right when a chat needs
 you (amber) or just finished (green). Hover opens the panel downward, in front of every app. Drag it away to
 undock. The choice is remembered across restarts.

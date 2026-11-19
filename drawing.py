@@ -87,7 +87,7 @@ def _shadow(w, h, rad, alpha, dpr):
     return pm
 
 
-def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False):
+def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False, ear=0.0):
     """Paint the shadow, the filled rounded shape and its border; return the shape for clipping the content.
 
     The shadow is cached by size, rounded to snap px so an animation does not flood the cache. flush_top, for the
@@ -96,10 +96,7 @@ def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=
     glass, and a light rim catches the top edge.
     """
     if flush_top:
-        shape, edge = QPainterPath(), QPainterPath()
-        shape.addRoundedRect(rect.adjusted(0, -2 * rad, 0, 0), rad, rad)
-        edge.addRect(rect)
-        shape = shape.intersected(edge)
+        shape = notch_shape(rect, rad, ear)
         qp.fillPath(shape, bg)
         return shape
     w = max(1, round(rect.width() / snap) * snap)
@@ -124,6 +121,24 @@ def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=
         qp.setPen(QPen(BORDER, 1))
     qp.drawPath(shape)
     return shape
+
+
+def notch_shape(rect, rad, ear=0.0):
+    """Hanging from the top edge: square top flaring out into the edge by ear px on each side, like the camera
+    notch itself, and round bottom corners of radius rad."""
+    l, t, r, b = rect.left(), rect.top(), rect.right(), rect.bottom()
+    rad = max(0.0, min(rad, rect.height() / 2, rect.width() / 2))
+    p = QPainterPath()
+    p.moveTo(l - ear, t)
+    p.quadTo(l, t, l, t + ear)
+    p.lineTo(l, b - rad)
+    p.quadTo(l, b, l + rad, b)
+    p.lineTo(r - rad, b)
+    p.quadTo(r, b, r, b - rad)
+    p.lineTo(r, t + ear)
+    p.quadTo(r, t, r + ear, t)
+    p.closeSubpath()
+    return p
 
 
 def icon_pixmap(size, paint, dpr=1):

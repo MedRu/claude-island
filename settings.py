@@ -13,7 +13,8 @@ from platforms import get_platform
 
 HERE = Path(__file__).resolve().parent
 CFG_FILE = HERE / "config" / "island_config.json"
-CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+CLAUDE_SETTINGS = CLAUDE_HOME / "settings.json"
 STATUS_SCRIPT = HERE / "statusline" / "island_statusline.py"
 STATUS_BEFORE = HERE / "config" / "statusline_before.json"   # your own status line, given back when turned off
 AUTOSTART = get_platform().autostart
@@ -216,3 +217,67 @@ def set_status_line(on):
         return False          # a status line you set up yourself: left alone
     _write_claude_settings(data)
     return True
+
+
+def _our_parts(command):
+    """(python, script) paths in our status line command, or None when the command is not ours."""
+    found = re.match(r'\s*"([^"]+)"\s+"([^"]+)"', command)
+    return found.groups() if found and STATUS_SCRIPT.name in found.group(2) else None
+
+
+def ensure_status_line():
+    """At startup: set up the status line when there is none yet, and repair ours when Python or the island moved.
+
+    A status line of your own is never changed here; the Startup switch does that, keeping yours running.
+    """
+    data = _read_claude_settings()
+    if data is None:
+        return
+    command = _status_command(data)
+    if not command:
+        set_status_line(True)
+        return
+    parts = _our_parts(command)
+    if parts and (parts[0] != _console_python() or parts[1] != STATUS_SCRIPT.as_posix()):
+        rest = command.split(parts[1], 1)[1].lstrip('"')             # keeps --then-b64 <your line>
+        data["statusLine"]["command"] = f'"{_console_python()}" "{STATUS_SCRIPT.as_posix()}"{rest}'
+        _write_claude_settings(data)
+
+
+def limits_report():
+    """(limits found, lines explaining where they come from and what is missing)."""
+    import time
+    lines = [f"Claude Code folder: {CLAUDE_HOME}"]
+    data = _read_claude_settings()
+    command = _status_command(data)
+    if data is None:
+        return False, lines + ["settings.json cannot be read"]
+    if not command:
+        return False, lines + ["No status line: turn on Settings > Startup > Show plan limits and cost"]
+    lines.append(f"Status line: {command[:140]}")
+    if not status_line_installed():
+        return False, lines + ["Your status line does not share the limits with the island: turn on "
+                               "Settings > Startup > Show plan limits and cost (yours keeps showing)"]
+    parts = _our_parts(command)
+    if parts:
+        for label, path in (("Python", parts[0]), ("Script", parts[1])):
+            if not Path(path).exists():
+                return False, lines + [f"{label} in the status line is missing: {path}. Restart the island "
+                                       "to repair it"]
+    folder = CLAUDE_HOME / "island"
+    files = sorted(folder.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True) if folder.is_dir() else []
+    if not files:
+        return False, lines + [f"Nothing in {folder} yet: Claude Code runs the status line after your next "
+                               "message in a chat (chats opened before the change need a new message too)"]
+    age = time.time() - files[0].stat().st_mtime
+    lines.append(f"Newest status file: {files[0].name}, {age / 60:.0f} min ago")
+    for f in files[:20]:
+        try:
+            limits = json.loads(f.read_text(encoding="utf-8-sig")).get("rate_limits")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if limits:
+            return True, lines + [f"Limits: {json.dumps(limits)}"]
+    return False, lines + ["Claude Code runs the status line but sends no plan limits. They are only sent "
+                           "when you are logged in with a Claude Pro or Max subscription (/login), not with "
+                           "an API key, and after the first reply of a session. Claude Code 2.1 or later."]

@@ -20,7 +20,8 @@ def save(raw, d):
     sid = str(d.get("session_id") or "")
     if not re.fullmatch(r"[A-Za-z0-9._-]+", sid):
         return
-    folder = os.path.join(os.path.expanduser("~"), ".claude", "island")
+    home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    folder = os.path.join(os.path.expanduser(home), "island")
     os.makedirs(folder, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=sid + ".", suffix=".tmp", dir=folder)
     try:

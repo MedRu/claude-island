@@ -17,7 +17,7 @@ from platforms import get_platform
 
 pid_alive = get_platform().proc.pid_alive
 
-CLAUDE_HOME = Path.home() / ".claude"
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
 SESSIONS_DIR = CLAUDE_HOME / "sessions"
 PROJECTS_DIR = CLAUDE_HOME / "projects"
 STATUS_DIR = CLAUDE_HOME / "island"

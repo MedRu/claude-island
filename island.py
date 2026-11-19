@@ -14,6 +14,15 @@ from platforms import get_platform
 CONFIG_DIR = Path(__file__).resolve().parent / "config"
 QUIT_MARK = CONFIG_DIR / "quit.mark"     # you quit it: prompts in open chats do not bring it back
 
+# --doctor: say whether the start hooks and the plan limits are set up, for a bug report.
+if "--doctor" in sys.argv:
+    import settings
+    found, report = settings.limits_report()
+    print("Claude Island doctor:", sys.platform, sys.executable)
+    print("Start hooks:", "on" if settings.start_hook_installed() else "off")
+    print("\n".join(report))
+    print("Plan limits:", "OK" if found else "missing")
+    sys.exit(0)
 # --detach (macOS and Linux hooks): start again in a session of our own, so the widget outlives the hook.
 if "--detach" in sys.argv:
     import subprocess
@@ -41,7 +50,7 @@ import threading
 import time
 from functools import partial
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QIcon, QLinearGradient,
                            QMovie, QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit, QMenu, QSystemTrayIcon, QToolTip, QWidget
@@ -71,6 +80,8 @@ ASK_ROW_H = 30                        # answer buttons under a waiting card
 REPLY_H = 32                          # reply box under them
 NOTCH_WING = 40                       # docked in a macOS notch: px each side of it while Claude works
 NOTCH_SNAP = 80                       # how close a drag must come to the notch to dock
+NOTCH_EAR = 8                         # docked: how far the top corners flare out into the screen edge
+TOP_DOCK_W = 184                      # screens with no notch: the island docks into a notch of its own
 NOTCH_BLACK = QColor(0, 0, 0)
 GLASS_TINT = 0.6                      # share of the background colour painted over the macOS glass
 AGENT_ROW_H = 18                      # one sub-agent under its chat's card
@@ -292,8 +303,9 @@ class Island(QWidget):
         self.tray.activated.connect(self.on_tray_activated)
         self.apply_settings()
         settings.update_start_hook()
+        settings.ensure_status_line()
         if self.cfg["notch"]:
-            self.dock(PLAT.look.notch_rect(self.screen()))
+            self.dock(self.notch_of(self.screen()))
         self.tray.show()
         for flag in (SHOW_FLAG, TOGGLE_FLAG, QUIT_FLAG):
             flag.unlink(missing_ok=True)
@@ -823,15 +835,27 @@ class Island(QWidget):
         self.apply_geometry()
         self.update()
 
+    def notch_of(self, screen):
+        """The screen's camera notch, or on a screen without one a notch-sized place at its top centre.
+
+        Docked there, the island is a black pill hanging from the top edge, like Alcove on a Mac without notch.
+        """
+        n = PLAT.look.notch_rect(screen)
+        if n is not None or screen is None:
+            return n
+        g = screen.geometry()
+        bar = screen.availableGeometry().top() - g.top()          # the macOS menu bar; 0 on Windows
+        return QRect(g.center().x() + 1 - TOP_DOCK_W // 2, g.top(), TOP_DOCK_W, bar if bar >= 22 else 32)
+
     def follow_notch(self):
-        """After a screen change, dock into the notch where it now is, or undock when the screen has none."""
+        """After a screen change, dock into the notch (or top centre) of the screen we are now on."""
         if self.notch is None and not self.cfg["notch"]:
             return
-        self.dock(PLAT.look.notch_rect(self.screen()))
+        self.dock(self.notch_of(self.screen()))
 
     def snap_to_notch(self, cursor):
         """While dragging, dock when the bar's top centre nears the notch and undock when pulled away."""
-        n = PLAT.look.notch_rect(self.screen())
+        n = self.notch_of(self.screen())
         if not n:
             return
         if self.notch:
@@ -1023,8 +1047,7 @@ class Island(QWidget):
         pct, _, reset = self.limit_state(key, now)
         name = "Session (5 h)" if key == "five_hour" else "Week"
         if pct is None:
-            lines = [f"{name} limit: not known yet",
-                     "Turn on Settings > Startup > Show plan limits, then send a message in a chat"]
+            lines = [f"{name} limit: not known yet", settings.limits_report()[1][-1]]
         elif reset:
             lines = [f"{name} limit: {pct:.0f}% used, resets in {fmt_dur(reset - now, coarse=True)}"]
         else:
@@ -1277,8 +1300,11 @@ class Island(QWidget):
             bg = QColor(BG.red(), BG.green(), BG.blue(), round(BG.alpha() * GLASS_TINT))
         else:
             bg = BG
-        shape = paint_frame(qp, r, self.RAD, bg, BG.alphaF(), snap=1 if self.springs_settled() else 4,
-                            flush_top=self.notch is not None, glass=self.glassed)
+        rad = self.RAD
+        if self.notch:                  # small and tight round the notch, softer as it opens, like Alcove
+            rad = lerp(min(self.CH * 0.42, 14), 26, p)
+        shape = paint_frame(qp, r, rad, bg, BG.alphaF(), snap=1 if self.springs_settled() else 4,
+                            flush_top=self.notch is not None, glass=self.glassed, ear=NOTCH_EAR)
         qp.setClipPath(shape)
         self.hits = []
         bar_alpha = clamp(1 - p * 4)    # the bar's content is gone by p = 0.25, before the panel's appears
