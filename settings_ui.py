@@ -1,6 +1,7 @@
 # Claude Island - a desktop widget for watching your Claude Code sessions
 # Copyright (c) 2026 Mohamed HAMANA (github.com/MedRu). MIT License, see LICENSE.
 """The settings flyout, drawn like the island and docked beside it so the island works as a live preview."""
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation
@@ -613,6 +614,15 @@ class SettingsWindow(QWidget):
                 "~Started by hand (the .vbs or the Start menu) it works alone, no Claude chat needed.",
                 "Staying",
                 ("Keep on screen when idle (pin)", self.toggle("pinned")),
+                *([("Dock", self.segmented("win_dock", [("off", "Off"), ("top", "Top"), ("bottom", "Taskbar"),
+                                                       ("left", "Left"), ("right", "Right")])),
+                   ("Dock position", self.slider("win_dock_pos", 0, 100)),
+                   ("Dock width", self.number("win_dock_w", 48, 400, 4, " px")),
+                   "~Docked, the island is a small black bar with the mascot on the top edge, just above the "
+                   "taskbar, or upright on the left or right side, where you put it: position 0 % = left / top "
+                   "end, 100 % = right / bottom end. It opens there on hover. You can also drag it onto any edge "
+                   "and along it; it stays until you pull it away."]
+                  if sys.platform == "win32" or sys.platform.startswith("linux") else []),
                 *([("Companion beside the notch", self.toggle("companion")),
                    "~Keeps a small Claude pill next to the camera notch so you always see it and its state, "
                    "even when another notch app fills the notch. News shows as a compact strip, not the whole "

@@ -87,22 +87,34 @@ def _shadow(w, h, rad, alpha, dpr):
     return pm
 
 
-def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False, ear=0.0, native_edge=False):
+def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False, ear=0.0, native_edge=False,
+                flush_bottom=False, flush_side=None):
     """Paint the shadow, the filled rounded shape and its border; return the shape for clipping the content.
 
     The shadow is cached by size, rounded to snap px so an animation does not flood the cache. flush_top, for the
     notch dock, squares the top corners and drops the shadow and border so the island merges with the notch.
     With glass (a native blur behind the shape) the shadow stays outside the shape, so it does not darken the
     glass, and a light rim catches the top edge. native_edge: the glass draws its own shadow and edge (macOS
-    Liquid Glass), so only the tint is painted.
+    Liquid Glass), so only the tint is painted. flush_bottom (Windows dock above the taskbar) is flush_top
+    upside down: the island stands on the taskbar. flush_side "left" / "right" (Windows and Linux side dock) is
+    the same shape turned a quarter so it hangs from that side of the screen.
     """
     if native_edge:
         shape = QPainterPath()
         shape.addRoundedRect(rect, rad, rad)
         qp.fillPath(shape, bg)
         return shape
-    if flush_top:
+    if flush_side:
+        l, t, w, h = rect.left(), rect.top(), rect.width(), rect.height()
+        shape = notch_shape(QRectF(0, 0, h, w), rad, ear)          # built hanging from the top, then turned
+        turn = QTransform(0, 1, 1, 0, l, t) if flush_side == "left" else QTransform(0, 1, -1, 0, l + w, t)
+        shape = turn.map(shape)
+        qp.fillPath(shape, bg)
+        return shape
+    if flush_top or flush_bottom:
         shape = notch_shape(rect, rad, ear)
+        if flush_bottom:            # mirrored round the rect's middle line
+            shape = QTransform(1, 0, 0, -1, 0, rect.top() + rect.bottom()).map(shape)
         qp.fillPath(shape, bg)
         return shape
     w = max(1, round(rect.width() / snap) * snap)

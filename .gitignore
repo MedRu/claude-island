@@ -5,6 +5,7 @@ config/hidden_windows.txt
 config/*.flag
 config/quit.mark
 config/statusline_before.json
+config/statusline_off.mark
 config/island.log
 config/island.lock
 

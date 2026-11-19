@@ -39,6 +39,8 @@ Not affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropi
 - **Settings window** for colours, transparency, size, your own mascot GIF or picture, sounds, timing and
   startup behaviour.
 - **macOS notch dock.** On a MacBook with a camera notch, the bar can dock into the notch.
+- **Edge dock on Windows and Linux.** The bar docks as a small notch-style tab on the top edge, just above the
+  taskbar, or upright on the left or right side, anywhere along that edge.
 
 ## Requirements
 
@@ -278,7 +280,8 @@ started). Mute them from the right-click menu. The sounds are synthesised by `so
 Drag the bar to the top centre of the screen and it docks there, in the style of Alcove and the iPhone's
 Dynamic Island: a black pill hanging from the top edge, its top corners flaring into the edge like the camera
 notch, with round bottom corners that grow softer as it opens. On a MacBook with a notch it wraps the notch;
-on other screens (and on Windows) it makes a notch-sized pill of its own at the top centre. Docked, it hangs from the top edge in the notch's black. While nothing happens it is the notch alone;
+on other Mac screens it makes a notch-sized pill of its own at the top centre (Windows and Linux have their own
+edge dock, below). Docked, it hangs from the top edge in the notch's black. While nothing happens it is the notch alone;
 while Claude works, the mascot peeks out on a small wing at the left, with a dot on the right when a chat needs
 you (amber) or just finished (green). Hover opens the panel downward, in front of every app. Drag it away to
 undock. The choice is remembered across restarts.
@@ -286,6 +289,22 @@ undock. The choice is remembered across restarts.
 With `pip install pyobjc-framework-Cocoa`, the exact notch size is read from AppKit and the window is raised
 above the menu bar. Without it, the notch is estimated (200 pt wide, centred, on screens with the taller notch
 menu bar). This has so far only been tested on Windows with a simulated notch, not on a real Mac.
+
+### Edge dock (Windows and Linux)
+
+Settings > Startup > Staying > **Dock**: Off, Top, Taskbar, Left or Right. Docked, the island is a small black
+tab flush with that edge, its corners flaring into it like a notch: hanging from the top edge, standing on the
+taskbar (or panel), or upright on a side. **Dock position** puts it anywhere along the edge (0 % = left or top
+end, 100 % = right or bottom end) and **Dock width** sets its length in px (default 72). You can also drag the
+bar onto any edge and along it; it sticks until pulled about 140 px away.
+
+The tab is never empty: idle, the mascot sits in it; while a chat works the tab grows and the mascot moves to one
+end, with Claude's turning spark at the other (an amber dot when a chat needs you, green when one finished).
+Hover opens the panel toward the screen, with motion after the macOS Dynamic Island: the width leads with a
+small bounce, the height follows, and closing pulls the height back first. Near a screen corner the open panel
+slides over to stay on screen while the tab stays put. On Linux this needs X11; on Wayland the island runs
+through XWayland when it is there, because Wayland does not let an app place its own windows. Linux has not
+been tested on real hardware yet.
 
 ### Transitions
 
@@ -350,6 +369,7 @@ Everything that touches the operating system lives in `platforms/<os>/`; the res
 | Start with Claude (hooks) | yes | yes | yes |
 | Menu entry | Start menu | `~/Applications/Claude Island.app` | applications menu (`~/.local/share/applications/claude-island.desktop`) |
 | Notch dock | no | yes (untested on real hardware) | no |
+| Edge dock (top, taskbar, sides) | yes | no (notch dock instead) | yes (X11 / XWayland, untested on real hardware) |
 | Glass background | no | yes (pyobjc) | no |
 | Click a card to focus its terminal | yes | the app, and the tab in Terminal and iTerm2 | no |
 | Allow / Deny / answers / reply box / Compact | yes | no | no |

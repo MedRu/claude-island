@@ -67,8 +67,11 @@ DEFAULTS = {
     "dy": 12,
     "notch": False,                 # macOS: docked in the camera notch
     "companion": False,             # macOS: always show a small Claude pill beside the notch (not over it)
+    "win_dock": None,               # Windows: "off", "top" (top edge of the screen) or "bottom" (above the taskbar)
+    "win_dock_w": 72,               # Windows: width of the docked bar, px
+    "win_dock_pos": 50,             # Windows: where along that edge, % of its width (0 left end, 100 right end)
 }
-NOT_RESET = ("pinned", "dx", "dy", "notch", "companion")   # "Reset to defaults" leaves the widget where it is
+NOT_RESET = ("pinned", "dx", "dy", "notch", "companion", "win_dock", "win_dock_pos", "win_dock_w")   # "Reset to defaults" leaves the widget where it is
 
 
 def load():

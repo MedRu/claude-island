@@ -46,6 +46,11 @@ QUIT_MARK.unlink(missing_ok=True)
 
 import math
 import os
+
+# Linux on Wayland: an app may not place its own windows there, so the island (docked or floating) would land
+# anywhere. Run it through XWayland instead when that is available and you did not pick a Qt platform yourself.
+if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY")         and not os.environ.get("QT_QPA_PLATFORM"):
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
 import threading
 import time
 from functools import partial
@@ -87,6 +92,18 @@ COMPANION_NOTIF_W = 250               # companion mode: width the pill grows to 
 NOTCH_SNAP = 80                       # how close a drag must come to the notch to dock
 NOTCH_EAR = 8                         # docked: how far the top corners flare out into the screen edge
 TOP_DOCK_W = 184                      # screens with no notch: the island docks into a notch of its own
+# Windows and Linux have no camera notch: the island docks on a screen edge of your choice instead (win_dock):
+# the top edge, above the taskbar or panel, or the left or right side. macOS keeps its notch dock.
+EDGE_DOCK = sys.platform == "win32" or sys.platform.startswith("linux")
+WIN_DOCK_H = 32                       # Windows: height of the docked bar
+WIN_DOCK_W = 72                       # Windows: width of the docked bar when idle (just a handle to hover)
+WIN_WING = 30                         # Windows: px each side of it for the mascot and the dot while Claude works
+# Windows dock motion, after the macOS Dynamic Island: (stiffness, damping ratio). Opening, the width leads
+# (~0.4 s, 3 % bounce) and the height follows with a soft bounce (~0.5 s, 4 %); closing, the height pulls back
+# first (~0.33 s, no bounce) and the width trails (~0.4 s), so the panel draws back into the bar like a drop.
+WIN_OPEN_W, WIN_OPEN_H = (190.0, 0.72), (140.0, 0.68)
+WIN_CLOSE_W, WIN_CLOSE_H = (170.0, 0.88), (260.0, 0.98)
+WIN_STICK = 140                       # Windows: px a drag must pull away from the dock before it lets go
 NOTCH_BLACK = QColor(0, 0, 0)
 GLASS_TINT = 0.6                      # share of the background colour painted over the macOS glass
 LIQUID_TINT = 0.3                     # the same over Liquid Glass (macOS 26), already dark and frosted
@@ -332,6 +349,8 @@ class Island(QWidget):
         self.island_hidden = False     # hidden by you (shortcut or menu) until you show it again
         self.hotkey = None             # label of the shortcut that hides and shows the island from any app
         self.notch = None              # macOS: QRect of the camera notch we are docked in
+        self.dock_bottom = False       # Windows/Linux: docked above the taskbar, opening upward
+        self.dock_side = None          # Windows/Linux: "left" or "right" when docked on a side of the screen
         self.glassed = False           # a native blur is behind the shape (macOS), so paint only a tint
         self.reply_sid = None          # the chat the reply box answers
         self.reply_lock = None         # (sid, tool id) once you start typing
@@ -374,16 +393,22 @@ class Island(QWidget):
         c = self.cfg
         apply_palette(c)
         self.W, self.RAD = int(c["width"]), int(c["corner_radius"])
-        # Companion and notch modes both dock to the camera notch; turning both off undocks again.
-        should_dock = bool(c.get("companion") or c["notch"])
-        if should_dock and self.notch is None:
-            self.dock(self.notch_of(self.screen()))
-        elif not should_dock and self.notch is not None and not self.dragging:
-            self.dock(None)
+        if EDGE_DOCK:
+            self.apply_win_dock()
+        else:
+            # Companion and notch modes both dock to the camera notch; turning both off undocks again.
+            should_dock = bool(c.get("companion") or c["notch"])
+            if should_dock and self.notch is None:
+                self.dock(self.notch_of(self.screen()))
+            elif not should_dock and self.notch is not None and not self.dragging:
+                self.dock(None)
         self.size_bar()
         speed = (c["animation_speed"] / 100) ** 2
         self.open_spring = (OPEN_SPRING[0] * speed, OPEN_SPRING[1])
         self.close_spring = (CLOSE_SPRING[0] * speed, CLOSE_SPRING[1])
+        self.win_springs = {k: (v[0] * speed, v[1]) for k, v in
+                            (("open_w", WIN_OPEN_W), ("open_h", WIN_OPEN_H),
+                             ("close_w", WIN_CLOSE_W), ("close_h", WIN_CLOSE_H))}
         self.panel_height.tune(200 * speed, 0.9)
         self.visibility.tune(170 * speed, 0.9)
         self.bar_width.target = self.W
@@ -861,8 +886,15 @@ class Island(QWidget):
         bar_top, bar_bottom = self.bar_edges()
         room_up = bar_bottom - g.top() - self.M - 4
         room_down = g.bottom() + 1 - bar_top - self.M - 4
+        if self.dock_side:             # on a side: the panel opens sideways, centred on the tab, any height
+            room_down = room_up = g.height() - 2 * self.M - 8
         if decide or self.opening.x < 0.02:
-            self.grow_down = bool(self.notch) or (need > room_up and (need <= room_down or room_down > room_up))
+            if self.dock_side:
+                self.grow_down = True
+            elif self.dock_bottom:     # standing on the taskbar: always opens upward
+                self.grow_down = False
+            else:
+                self.grow_down = bool(self.notch) or (need > room_up and (need <= room_down or room_down > room_up))
         avail = room_down if self.grow_down else room_up
         if need <= avail or not heights:
             self.visible_k = len(heights)
@@ -880,6 +912,9 @@ class Island(QWidget):
     def size_bar(self):
         """Bar height and closed width: from the settings, or when docked, the notch plus a wing each side."""
         n = self.notch
+        if self.dock_side and n:       # upright tab: CH is its thickness, mini_w its length down the edge
+            self.CH, self.mini_w = n.width(), n.height() + 2 * self.notch_wing()
+            return
         self.CH = n.height() if n else int(self.cfg["bar_height"])
         if self.companion():
             self.mini_w = COMPANION_W            # a small pill beside the notch, not the notch itself
@@ -899,17 +934,22 @@ class Island(QWidget):
         """Docked and closed, the island is the notch alone, with a small wing for the mascot while there is
         news: a chat working or waiting, or one that just finished."""
         busy = self.working() or self.attention or (self.toast and self.toast[0] in ("done", "waiting"))
-        return NOTCH_WING if busy else 0
+        if not busy:
+            return 0
+        return WIN_WING if EDGE_DOCK else NOTCH_WING
 
     def dock(self, rect):
         """Dock into the notch rect, or undock with None. Docked, the island hangs from the top and opens down."""
         if rect == self.notch:
             return
         self.notch = rect
+        self.dock_bottom = EDGE_DOCK and rect is not None and self.cfg.get("win_dock") == "bottom"
+        side = self.cfg.get("win_dock")
+        self.dock_side = side if EDGE_DOCK and rect is not None and side in ("left", "right") else None
         self.size_bar()
         PLAT.look.keep_on_top(self, bool(rect))
         if rect:
-            self.grow_down = True
+            self.grow_down = not self.dock_bottom
         self.apply_hover()
         self.apply_geometry()
         self.update()
@@ -922,9 +962,80 @@ class Island(QWidget):
         n = PLAT.look.notch_rect(screen)
         if n is not None or screen is None:
             return n
+        if EDGE_DOCK:
+            return self.win_dock_rect(screen, self.cfg.get("win_dock"))
         g = screen.geometry()
         bar = screen.availableGeometry().top() - g.top()          # the macOS menu bar; 0 on Windows
         return QRect(g.center().x() + 1 - TOP_DOCK_W // 2, g.top(), TOP_DOCK_W, bar if bar >= 22 else 32)
+
+    # ---------------------------------------------------------------- Windows dock (no camera notch)
+    def apply_win_dock(self):
+        """Windows: dock on the top edge or on the taskbar as win_dock says, or float when it is off."""
+        c = self.cfg
+        if c.get("win_dock") not in ("off", "top", "bottom", "left", "right"):   # first run: keep an older dock
+            c["win_dock"] = "top" if c["notch"] else "off"
+        c["notch"] = c["win_dock"] != "off"
+        if self.dragging:
+            return
+        self.dock(self.notch_of(self.screen()) if c["notch"] else None)
+
+    def win_dock_rect(self, screen, edge, pos=None):
+        """The docked bar on the top edge of the screen or just above the taskbar, where you put it along that
+        edge: pos (win_dock_pos) is in % of the edge, 0 = left end, 100 = right end."""
+        a = screen.availableGeometry()
+        pos = clamp(float(self.cfg.get("win_dock_pos", 50) if pos is None else pos) / 100)
+        w = self.win_dock_w()
+        span = a.width() - w - 2 * WIN_WING                    # the wings stay on screen at either end
+        x = a.left() + WIN_WING + round(pos * span)
+        if edge in ("left", "right"):  # upright tab: pos runs from the top (0 %) to the bottom (100 %)
+            span = a.height() - w - 2 * WIN_WING
+            y = a.top() + WIN_WING + round(pos * span)
+            x = a.left() if edge == "left" else a.right() + 1 - WIN_DOCK_H
+            return QRect(x, y, WIN_DOCK_H, w)
+        if edge == "bottom":
+            return QRect(x, a.bottom() + 1 - WIN_DOCK_H, w, WIN_DOCK_H)
+        return QRect(x, screen.geometry().top(), w, WIN_DOCK_H)
+
+    def win_dock_w(self):
+        """Width of the docked bar in px, from Settings > Dock width."""
+        return int(clamp(float(self.cfg.get("win_dock_w", WIN_DOCK_W)), 48, 400))
+
+    def win_pos_at(self, screen, x, vertical=False):
+        """win_dock_pos that puts the bar's centre under the global x (or y on a side)."""
+        a = screen.availableGeometry()
+        w = self.win_dock_w()
+        start, length = (a.top(), a.height()) if vertical else (a.left(), a.width())
+        span = max(1, length - w - 2 * WIN_WING)
+        return round(clamp((x - start - WIN_WING - w / 2) / span) * 100, 1)
+
+    def snap_to_win_dock(self, cursor):
+        """While dragging: bring the bar near an edge (top, taskbar, left or right side), anywhere along it, and it
+        docks there; docked, it slides along the edge under the cursor. It sticks: it lets go only when pulled
+        WIN_STICK px away from its edge, or brought nearer another edge."""
+        screen = QGuiApplication.screenAt(cursor) or self.screen()
+        if not screen:
+            return
+        a, full = screen.availableGeometry(), screen.geometry()
+        dist = {"top": cursor.y() - full.top(), "bottom": a.bottom() - cursor.y(),
+                "left": cursor.x() - a.left(), "right": a.right() - cursor.x()}
+        current = self.cfg.get("win_dock") if self.notch is not None else None
+        edge = min(dist, key=dist.get)
+        if dist[edge] > NOTCH_SNAP:
+            edge = None
+        if current in dist and dist[current] <= WIN_STICK and (edge is None or dist[edge] >= dist[current] - 4):
+            edge = current             # docked: hold on to this edge until pulled well away
+        if edge is None:
+            if self.notch is not None:
+                self.cfg["win_dock"] = "off"
+                self.dock(None)
+            return
+        vertical = edge in ("left", "right")
+        pos = self.win_pos_at(screen, cursor.y() if vertical else cursor.x(), vertical)
+        self.cfg["win_dock"], self.cfg["win_dock_pos"] = edge, pos
+        n = self.win_dock_rect(screen, edge, pos)
+        if self.notch != n:
+            self.notch = None          # a new place (or edge): dock() sets it all up again
+            self.dock(n)
 
     def follow_notch(self):
         """After a screen change, dock into the notch (or top centre) of the screen we are now on."""
@@ -937,6 +1048,8 @@ class Island(QWidget):
         pulled well clear of it. The box is a forgiving target: step inside and the bar takes the notch
         style right away, so you see where it will land. A hysteresis margin stops it flickering at the edge.
         """
+        if EDGE_DOCK:
+            return self.snap_to_win_dock(cursor)
         n = self.notch_of(self.screen())
         if not n:
             return
@@ -1009,6 +1122,8 @@ class Island(QWidget):
         painting moves. Resizing a translucent window every frame flickers on Windows. The transparent part
         lets clicks through.
         """
+        if self.dock_side and self.notch:
+            return self.apply_side_geometry()
         h = max(lerp(self.CH, self.panel_height.x, self.opening.x), self.CH * 0.6)
         width = self.bar_width.x
         if self.springs_settled():
@@ -1032,9 +1147,17 @@ class Island(QWidget):
             else:
                 x, y = self.notch.center().x() + 1 - outer_w // 2, self.notch.top()
                 pill_x = (outer_w - width) / 2
+                if EDGE_DOCK:                # near a screen end the open panel slides over, the bar stays put
+                    g = self.screen_geo()
+                    x = clamp(x, g.left() - self.M, g.right() + 1 + self.M - outer_w)
+                    pill_x = clamp(self.notch.center().x() + 1 - width / 2 - x, self.M, outer_w - self.M - width)
+            pill_y = 0
+            if self.dock_bottom:       # standing on the taskbar: the window ends at its top edge
+                y = self.notch.bottom() + 1 - outer_h
+                pill_y = outer_h - h
             if self.geometry().getRect() != (x, y, outer_w, outer_h):
                 self.setGeometry(int(x), int(y), outer_w, outer_h)
-            self.pill = QRectF(pill_x, 0, width, h)
+            self.pill = QRectF(pill_x, pill_y, width, h)
             self.sync_glass()
             return
         g = self.screen_geo()
@@ -1052,6 +1175,64 @@ class Island(QWidget):
             self.setGeometry(x, y, outer_w, outer_h)
         self.pill = QRectF(outer_w - self.M - width, pill_y, width, h)
         self.sync_glass()
+
+    def side_size(self, opening, bar_width, panel_h):
+        """(width, height) of the shape docked on a side: an upright tab that grows sideways into the panel.
+        The width follows bar_width (it leads, as on the top dock) and the height follows opening."""
+        n = self.notch
+        closed_len = min(bar_width, n.height() + 2 * WIN_WING)       # the tab and its wings
+        fw = clamp((bar_width - self.mini_w) / max(1, self.W - self.mini_w), 0, 1.06)
+        w = lerp(self.CH, self.W, fw)
+        h = lerp(closed_len, panel_h, clamp(opening, 0, 1.06))
+        return max(w, self.CH * 0.6), max(h, self.CH)
+
+    def apply_side_geometry(self):
+        """Docked on a side: the window hugs that edge, the shape is centred on the tab and kept on screen."""
+        n, g = self.notch, self.screen_geo()
+        width, h = self.side_size(self.opening.x, self.bar_width.x, self.panel_height.x)
+        if self.springs_settled():
+            win_w, win_h = width, h
+            self.win_box = (0.0, 0.0)
+        else:
+            end_w, end_h = self.side_size(self.opening.target, self.bar_width.target, self.panel_height.target)
+            win_w = max(width, end_w * 1.06, self.win_box[0])
+            win_h = max(h, end_h * 1.06, self.win_box[1])
+            self.win_box = (win_w, win_h)
+        outer_w, outer_h = math.ceil(win_w) + self.M, math.ceil(win_h) + 2 * self.M
+        x = n.left() if self.dock_side == "left" else n.right() + 1 - outer_w
+        y = clamp(n.center().y() + 1 - outer_h // 2, g.top() - self.M, g.bottom() + 1 + self.M - outer_h)
+        pill_x = 0 if self.dock_side == "left" else outer_w - width
+        pill_y = clamp(n.center().y() + 1 - h / 2 - y, self.M, outer_h - self.M - h)
+        if self.geometry().getRect() != (x, int(y), outer_w, outer_h):
+            self.setGeometry(x, int(y), outer_w, outer_h)
+        self.pill = QRectF(pill_x, pill_y, width, h)
+
+    def paint_side_dock_bar(self, qp, r):
+        """Docked on a side, closed: the mascot stands in the tab; while a chat works the tab grows longer, the
+        mascot moves up and Claude's spark (or the amber / green dot) shows below it."""
+        self.bar_pin = QRectF()
+        wing = (r.height() - self.notch.height()) / 2
+        k = clamp((wing - 6) / max(1, WIN_WING - 6))
+        cx = r.center().x()
+        y = lerp(r.center().y(), r.top() + wing / 2 + 4, k)
+        self.paint_mascot(qp, QPointF(cx, y + 2), min(16, self.CH * 0.44), self.mascot_mode())
+        if k <= 0.01:
+            return
+        base = qp.opacity()
+        qp.setOpacity(base * k)
+        c = QPointF(cx, r.bottom() - wing / 2 - 3)
+        if any(s["status"] == "waiting" for s in self.sessions):
+            color = AMBER
+        elif self.toast and self.toast[0] == "done":
+            color = GREEN
+        else:
+            color = None
+            draw_spark(qp, c, 6.5, self.anim_t(), self.working(), CLAUDE)
+        if color is not None:
+            qp.setPen(Qt.PenStyle.NoPen)
+            qp.setBrush(color)
+            qp.drawEllipse(c, 4, 4)
+        qp.setOpacity(base)
 
     def liquid(self):
         """macOS 26 Liquid Glass is behind the shape: it brings its own shadow and edge."""
@@ -1123,8 +1304,13 @@ class Island(QWidget):
         if want != self.opening.target:
             if want and self.opening.x < 0.05:
                 self.panel_height.target = self.panel_height.x = self.expanded_height(decide=True)
-            for sp in (self.opening, self.bar_width):
-                sp.tune(*(self.open_spring if want else self.close_spring))
+            if EDGE_DOCK and self.notch is not None:     # docked on Windows: Dynamic Island motion
+                mode = "open" if want else "close"
+                self.bar_width.tune(*self.win_springs[mode + "_w"])
+                self.opening.tune(*self.win_springs[mode + "_h"])
+            else:
+                for sp in (self.opening, self.bar_width):
+                    sp.tune(*(self.open_spring if want else self.close_spring))
         self.opening.target = want
         if self.companion() and not want:
             # closed: a slim strip (mascot + one line) when there is news, otherwise just the mascot pill
@@ -1244,6 +1430,8 @@ class Island(QWidget):
         if self.dragging:
             self.dragging = False
             self.cfg["notch"] = self.notch is not None
+            if EDGE_DOCK:
+                self.cfg["win_dock"] = ("bottom" if self.dock_bottom else "top") if self.notch else "off"
             settings.save(self.cfg)
             return self.apply_hover()
         hit = self.hit_at(e.position())
@@ -1447,8 +1635,9 @@ class Island(QWidget):
             rad = lerp(min(self.CH * 0.42, 14), 26, p)
         flush = self.notch is not None and not self.companion()   # companion is a free pill, rounded all round
         shape = paint_frame(qp, r, rad, bg, BG.alphaF(), snap=1 if self.springs_settled() else 4,
-                            flush_top=flush, glass=self.glassed, ear=NOTCH_EAR,
-                            native_edge=self.liquid() and not self.notch)
+                            flush_top=flush and not self.dock_bottom and not self.dock_side, glass=self.glassed,
+                            ear=NOTCH_EAR, native_edge=self.liquid() and not self.notch,
+                            flush_bottom=flush and self.dock_bottom, flush_side=self.dock_side if flush else None)
         qp.setClipPath(shape)
         self.hits = []
         bar_alpha = clamp(1 - p * 4)    # the bar's content is gone by p = 0.25, before the panel's appears
@@ -1540,6 +1729,8 @@ class Island(QWidget):
         return CLAUDE_LIGHT if self.pinned else lit
 
     def paint_bar(self, qp, r):
+        if self.dock_side and self.notch:
+            return self.paint_side_dock_bar(qp, r)
         top = r.top() if self.grow_down else r.bottom() - self.CH
         cy = top + self.CH / 2
         offset = (self.CH - 56) / 2      # the text layout is designed for a 56 px bar, centred in others
@@ -1596,11 +1787,13 @@ class Island(QWidget):
         needs you or just finished. Idle, the wings are folded away and only the notch is left."""
         self.bar_pin = QRectF()
         wing = (r.width() - self.notch.width()) / 2      # follows the width spring as the wings open
+        if EDGE_DOCK:
+            return self.paint_win_dock_bar(qp, r, wing)
         if wing < 12:
             return
         base = qp.opacity()
         qp.setOpacity(base * clamp((wing - 12) / (NOTCH_WING - 12)))
-        cy = r.top() + self.CH / 2
+        cy = (r.top() if self.grow_down else r.bottom() - self.CH) + self.CH / 2
         self.paint_mascot(qp, QPointF(r.left() + wing / 2 + 2, cy + 2), min(16, self.CH * 0.44), self.mascot_mode())
         if any(s["status"] == "waiting" for s in self.sessions):
             color = AMBER
@@ -1614,6 +1807,33 @@ class Island(QWidget):
             qp.drawEllipse(QPointF(r.right() - wing / 2 - 2, cy), 4, 4)
         qp.setOpacity(base)
 
+    def paint_win_dock_bar(self, qp, r, wing):
+        """Windows dock, closed: the Claude mascot is always there. Idle it sits in the middle of the bar; when a
+        chat works it glides out into the left wing as the bar widens, and a dot on the right flags a chat that
+        needs you or just finished (Claude's turning spark there while it just works)."""
+        k = clamp((wing - 6) / max(1, WIN_WING - 6))     # 0 idle bar .. 1 wings fully out
+        cy = (r.top() if self.grow_down else r.bottom() - self.CH) + self.CH / 2
+        x = lerp(r.center().x(), r.left() + wing / 2 + 4, k)
+        self.paint_mascot(qp, QPointF(x, cy + 2), min(16, self.CH * 0.44), self.mascot_mode())
+        if k <= 0.01:
+            return
+        if any(s["status"] == "waiting" for s in self.sessions):
+            color = AMBER
+        elif self.toast and self.toast[0] == "done":
+            color = GREEN
+        else:                          # just working: Claude's spark turns in the right wing, no empty black
+            base = qp.opacity()
+            qp.setOpacity(base * k)
+            draw_spark(qp, QPointF(r.right() - wing / 2 - 3, cy), 6.5, self.anim_t(), self.working(), CLAUDE)
+            qp.setOpacity(base)
+            return
+        base = qp.opacity()
+        qp.setOpacity(base * k)
+        qp.setPen(Qt.PenStyle.NoPen)
+        qp.setBrush(color)
+        qp.drawEllipse(QPointF(r.right() - wing / 2 - 3, cy), 4, 4)
+        qp.setOpacity(base)
+
     def reveal(self, qp, r, y, h):
         """Fade and raise one panel block as the panel opens, blocks nearest the bar first."""
         full_h = max(1.0, self.panel_height.x)
@@ -1622,10 +1842,16 @@ class Island(QWidget):
         a = ease_out((clamp(self.opening.x) - 0.30 - 0.28 * from_bar) / 0.40)
         qp.setOpacity(a)
         qp.translate(0, (1 - a) * 10)
+        if EDGE_DOCK and self.notch is not None:   # Dynamic Island: each block also grows in from 92 % of its size
+            k = 0.92 + 0.08 * a
+            qp.translate(r.center().x(), mid)
+            qp.scale(k, k)
+            qp.translate(-r.center().x(), -mid)
 
     def paint_panel(self, qp, r):
         now, t = time.time(), self.anim_t()
-        x0, width = r.right() - self.W + 12, self.W - 24
+        left = r.left() if self.dock_side == "left" else r.right() - self.W   # left dock: content stays put
+        x0, width = left + 12, self.W - 24
         # blocks are drawn at their final place and uncovered as the shape grows
         y = (r.top() + 10 + self.notch_pad()) if self.grow_down else (r.bottom() - self.panel_height.x + 10)
         qp.save()
