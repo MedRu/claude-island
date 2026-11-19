@@ -17,6 +17,7 @@ from drawing import BG, CLAUDE, draw_gear, icon_pixmap, paint_frame
 BRIGHT = ["#d97757", "#fce100", "#6ccb5f", "#60cdff", "#b48cff", "#ff6f91", "#f7a35c", "#8a8a8a"]
 DARK = ["#202020", "#1b1b1f", "#1e2430", "#1f2a24", "#2a1f24", "#101010", "#2b2b2b", "#3a3a3a"]
 IMAGES = "Images and GIFs (*.gif *.png *.jpg *.jpeg *.webp *.bmp)"
+GLASS_TINT, LIQUID_TINT = 0.6, 0.3      # share of the background painted over the glass (mirrors the island)
 SOUND_LABELS = (("start", "A chat starts working"), ("needs", "A chat needs you"), ("done", "A chat finished"),
                 ("warn", "Usage passes 75 % / 90 %"), ("limit", "A limit is reached (100 %)"))
 
@@ -54,6 +55,7 @@ def style(accent, bg):
     QLabel#section {{ color:{accent}; font-size:11px; font-weight:600; padding-top:10px; }}
     QLabel#hint {{ color:#8c8c8c; font-size:11px; }}
     QLabel#name {{ color:#c8c8c8; }}
+    QLabel#sub {{ color:#9a9a9a; }}
     QPushButton {{ background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08); border-radius:6px;
         padding:4px 10px; }}
     QPushButton:hover {{ background:rgba(255,255,255,0.11); }}
@@ -205,6 +207,7 @@ class SettingsWindow(QWidget):
         self.syncers = []               # callbacks that show the current cfg values in the controls
         self.drag_from = None
         self.colors_now = None
+        self.glassed = False            # a native blur sits behind the window, like the island's glass
         self.no_wheel = NoStrayWheel(self)
         self.save_timer = QTimer(self, singleShot=True, interval=400, timeout=lambda: settings.save(self.cfg))
         self.resize(self.W + 2 * self.M, self.H + 2 * self.M)
@@ -214,13 +217,28 @@ class SettingsWindow(QWidget):
         for keys in (QKeySequence(Qt.Key.Key_Escape), QKeySequence.StandardKey.Close, QKeySequence("Ctrl+,")):
             QShortcut(keys, self, self.close, context=Qt.ShortcutContext.WindowShortcut)
 
-    # ---------------- frame: painted like the island
+    # ---------------- frame: painted like the island, with the same glass behind it
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bg = QColor(BG)
-        bg.setAlpha(255)                    # always solid, so the settings text stays crisp
-        paint_frame(p, QRectF(self.rect()).adjusted(self.M, self.M, -self.M, -self.M), self.island.RAD, bg)
+        r = QRectF(self.rect()).adjusted(self.M, self.M, -self.M, -self.M)
+        liquid = self.glassed and getattr(get_platform().look, "LIQUID", False)
+        if self.glassed:                    # a tint over the blur, not a solid fill, so the glass shows
+            tint = LIQUID_TINT if liquid else GLASS_TINT
+            bg = QColor(BG.red(), BG.green(), BG.blue(), round(255 * tint))
+        else:
+            bg = QColor(BG)
+            bg.setAlpha(255)                # no glass: a solid panel, text stays crisp
+        paint_frame(p, r, self.island.RAD, bg, glass=self.glassed, native_edge=liquid)
+
+    def sync_glass(self):
+        """Put the macOS glass behind the window and keep it the shape of the frame; the M margin stays clear
+        so the blur has the same padded, floating look as the island."""
+        look = get_platform().look
+        want = bool(self.cfg["glass"]) and look.HAS_GLASS
+        if want or self.glassed:
+            rect = QRectF(self.rect()).adjusted(self.M, self.M, -self.M, -self.M)
+            self.glassed = look.glass(self, rect if want else None, self.island.RAD, BG.lightnessF() < 0.5)
 
     def restyle(self):
         # setStyleSheet is slow, so only redo it when the colours changed
@@ -353,7 +371,7 @@ class SettingsWindow(QWidget):
                 name, control = row
                 line = QHBoxLayout()
                 label = QLabel(name)
-                label.setObjectName("name")
+                label.setObjectName("sub" if name.startswith("↳") else "name")
                 line.addWidget(label)
                 line.addStretch()
                 line.addWidget(control)
@@ -377,6 +395,7 @@ class SettingsWindow(QWidget):
         """Show the current values, also after a change made elsewhere such as the island's pin or the tray menu."""
         for refresh in self.syncers:
             refresh()
+        self.sync_glass()
         self.restyle()
 
     def reset(self):
@@ -478,7 +497,7 @@ class SettingsWindow(QWidget):
             if not pm.isNull():
                 pm = pm.scaled(26, 26, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             preview.setPixmap(pm)
-            preview.setVisible(thumb)
+            preview.setVisible(thumb and not pm.isNull())   # no empty box when it is the built-in mascot
 
         def choose():
             start = str(Path(self.cfg[key]).parent) if self.cfg[key] else str(Path.home())
@@ -561,8 +580,8 @@ class SettingsWindow(QWidget):
         for cue, label in SOUND_LABELS:
             test = icon_button("▶", "Play it")
             test.clicked.connect(lambda _=False, c=cue: sounds.play(c, force=True))
-            rows.append((label, self.toggle(f"sound_{cue}")))
-            rows.append(("     sound", self.file(f"sound_file_{cue}", "Sounds (*.wav)", test)))
+            rows.append((label, hrow(test, self.toggle(f"sound_{cue}"), spacing=8)))
+            rows.append(("↳ Custom sound", self.file(f"sound_file_{cue}", "Sounds (*.wav)")))
         return rows + ["~Usage = the Session (5 h) and Week limits. Your own sound must be a .wav file."]
 
     def timing(self):
@@ -594,6 +613,11 @@ class SettingsWindow(QWidget):
                 "~Started by hand (the .vbs or the Start menu) it works alone, no Claude chat needed.",
                 "Staying",
                 ("Keep on screen when idle (pin)", self.toggle("pinned")),
+                *([("Companion beside the notch", self.toggle("companion")),
+                   "~Keeps a small Claude pill next to the camera notch so you always see it and its state, "
+                   "even when another notch app fills the notch. News shows as a compact strip, not the whole "
+                   "panel; hover it to open the full island."]
+                  if get_platform().look.HAS_GLASS else []),
                 *([(f"{get_platform().hotkey.LABEL} hides or shows the island", self.toggle("global_hotkey")),
                    "~Works from any app. Hidden, the island stays away until you press it again or use the "
                    "tray menu; sounds still play."]

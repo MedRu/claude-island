@@ -1,3 +1,3 @@
 PySide6-Essentials>=6.6
-# macOS only, optional: reads the exact camera-notch size and raises the docked bar above the menu bar
-# pyobjc-framework-Cocoa; sys_platform == "darwin"
+# macOS: the glass, the exact camera-notch size, staying above the menu bar and full-screen apps
+pyobjc-framework-Cocoa; sys_platform == "darwin"

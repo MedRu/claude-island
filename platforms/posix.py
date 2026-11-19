@@ -21,19 +21,19 @@ def focus(title, pid=None):
     return False
 
 
-def send_command(title, text):
+def send_command(title, text, pid=None):
     return False
 
 
-def press(title, ch):
+def press(title, ch, pid=None):
     return False
 
 
-def reject_with(title, text):
+def reject_with(title, text, pid=None):
     return False
 
 
-def answer_other(title, n_options, text):
+def answer_other(title, n_options, text, pid=None):
     return False
 
 
@@ -156,7 +156,11 @@ def notch_rect(screen):
     return None
 
 
-def keep_on_top(widget, over_menu_bar=False):
-    """Put the window back above the others; some window managers drop stay-on-top windows behind."""
-    if widget.isVisible():
+def keep_on_top(widget, over_menu_bar=False, bump=0, raise_front=True):
+    """Put the window back above the others; some window managers drop stay-on-top windows behind.
+
+    bump and raise_front are no-ops here: raising the tooltip after the island already puts it on top, and
+    there is no notch to share politely. raise_() is skipped only when a polite (non-raising) pass is asked.
+    """
+    if widget.isVisible() and raise_front:
         widget.raise_()

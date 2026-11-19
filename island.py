@@ -53,7 +53,7 @@ from functools import partial
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QIcon, QLinearGradient,
                            QMovie, QPainter, QPen, QPixmap)
-from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit, QMenu, QSystemTrayIcon, QToolTip, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QLineEdit, QMenu, QSystemTrayIcon, QWidget
 
 import settings
 import sounds
@@ -74,16 +74,22 @@ HIDDEN_FILE = settings.HERE / "config" / "hidden_windows.txt"
 CFG = settings.load()
 
 COMPACT_AT = 40                       # context % from which a card offers Compact
-OPEN_SPRING = (438.0, 1.0)            # stiffness, damping: about 0.3 s to open, no overshoot
-CLOSE_SPRING = (987.0, 1.0)           # about 0.2 s to close
+# Alcove-style notch motion. stiffness, damping ratio (<1 overshoots). The drop-down is a bit slower and
+# gently bouncy (~0.39 s, ~7% overshoot); the wrap is snappy and tight (~0.27 s, barely any overshoot).
+OPEN_SPRING = (260.0, 0.66)           # drop down: springy, like Alcove opening
+CLOSE_SPRING = (520.0, 0.80)          # wrap up: quick and clean
 ASK_ROW_H = 30                        # answer buttons under a waiting card
 REPLY_H = 32                          # reply box under them
 NOTCH_WING = 40                       # docked in a macOS notch: px each side of it while Claude works
+COMPANION_W = 46                      # companion mode: width of the small Claude pill beside the notch
+COMPANION_GAP = 8                     # companion mode: gap between the notch and the pill
+COMPANION_NOTIF_W = 250               # companion mode: width the pill grows to for a compact notification
 NOTCH_SNAP = 80                       # how close a drag must come to the notch to dock
 NOTCH_EAR = 8                         # docked: how far the top corners flare out into the screen edge
 TOP_DOCK_W = 184                      # screens with no notch: the island docks into a notch of its own
 NOTCH_BLACK = QColor(0, 0, 0)
 GLASS_TINT = 0.6                      # share of the background colour painted over the macOS glass
+LIQUID_TINT = 0.3                     # the same over Liquid Glass (macOS 26), already dark and frosted
 AGENT_ROW_H = 18                      # one sub-agent under its chat's card
 AGENT_ROWS_MAX = 3                    # beyond this the last row says "+N more"
 AGENT_LINGER_S = 60                   # a finished sub-agent keeps its row this long
@@ -222,6 +228,51 @@ def doing(s, default=""):
     return f"{tool}: {s['detail']}" if s["detail"] else tool
 
 
+class Tip(QLabel):
+    """A tooltip the island owns. Qt's native tooltip is a plain window, so on macOS it opens *under* the
+    island, which floats above other windows; this one is raised one level higher, so it is always on top."""
+
+    def __init__(self):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Only text colour and padding here. The background is painted in paintEvent: a stylesheet background
+        # on a translucent top-level window does not fill reliably, so over the glass the box went invisible.
+        self.setStyleSheet("color:#f0f0f0; padding:6px 9px;")
+        self.setWordWrap(True)                                   # long tool details wrap instead of overflowing
+        PLAT.look.fix_tool_window(self)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(28, 28, 28, 246))                      # opaque dark box, so text always reads
+        p.drawRoundedRect(QRectF(self.rect()), 7, 7)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QColor(255, 255, 255, 38))
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+        p.end()
+        super().paintEvent(e)                                    # QLabel draws the text on top
+
+    def show_text(self, pos, text, over_menu_bar=False):
+        """Show text near the global point pos, kept on screen and above the island."""
+        if not text:
+            return self.hide()
+        self.setText(text)
+        scr = QGuiApplication.screenAt(pos) or QGuiApplication.primaryScreen()
+        area = scr.availableGeometry()
+        self.setMaximumWidth(min(360, area.width() - 16))        # cap width, then let word wrap set the height
+        self.adjustSize()
+        x = clamp(pos.x() + 12, area.left() + 4, area.right() - self.width() - 4)
+        y = clamp(pos.y() + 18, area.top() + 4, area.bottom() - self.height() - 4)
+        self.move(int(x), int(y))
+        self.show()
+        PLAT.look.keep_on_top(self, over_menu_bar, bump=1)
+
+
 class Island(QWidget):
     M = 14            # margin around the shape, room for its shadow
     HEAD_H = 32
@@ -285,6 +336,7 @@ class Island(QWidget):
         self.reply_sid = None          # the chat the reply box answers
         self.reply_lock = None         # (sid, tool id) once you start typing
 
+        self.tip = Tip()
         self.reply = QLineEdit(self)
         self.reply.hide()
         self.reply.setFont(font(12))
@@ -304,7 +356,7 @@ class Island(QWidget):
         self.apply_settings()
         settings.update_start_hook()
         settings.ensure_status_line()
-        if self.cfg["notch"]:
+        if self.cfg["notch"] or self.cfg.get("companion"):
             self.dock(self.notch_of(self.screen()))
         self.tray.show()
         for flag in (SHOW_FLAG, TOGGLE_FLAG, QUIT_FLAG):
@@ -322,6 +374,12 @@ class Island(QWidget):
         c = self.cfg
         apply_palette(c)
         self.W, self.RAD = int(c["width"]), int(c["corner_radius"])
+        # Companion and notch modes both dock to the camera notch; turning both off undocks again.
+        should_dock = bool(c.get("companion") or c["notch"])
+        if should_dock and self.notch is None:
+            self.dock(self.notch_of(self.screen()))
+        elif not should_dock and self.notch is not None and not self.dragging:
+            self.dock(None)
         self.size_bar()
         speed = (c["animation_speed"] / 100) ** 2
         self.open_spring = (OPEN_SPRING[0] * speed, OPEN_SPRING[1])
@@ -591,6 +649,14 @@ class Island(QWidget):
     def working(self):
         return any(s["status"] in ("busy", "waiting") for s in self.sessions)
 
+    def companion(self):
+        """Companion mode: a small Claude pill always beside a real camera notch, not over it."""
+        return bool(self.cfg.get("companion")) and self.notch is not None
+
+    def has_news(self):
+        """Something worth a compact notification: a chat working, waiting, or one that just finished."""
+        return bool(self.working() or self.attention or self.toast)
+
     def is_mini(self):
         """Show only the mascot: always when docked, else when pinned or solo and quiet for a while."""
         if self.notch is not None:
@@ -606,7 +672,8 @@ class Island(QWidget):
             return False
         # docked, an idle island is just the notch's own black, there to be hovered
         return (self.working() or self.toast is not None or self.pinned or self.hover or self.lingering
-                or self.dragging or (self.notch is not None and bool(self.sessions)) or bool(winctl.HIDDEN) or self.previewing()
+                or self.dragging or self.companion() or (self.notch is not None and bool(self.sessions))
+                or bool(winctl.HIDDEN) or self.previewing()
                 or (self.solo and self.cfg["show_when_started_by_hand"]))
 
     # ---------------------------------------------------------------- actions
@@ -650,10 +717,10 @@ class Island(QWidget):
             return
         kind = self.ask_kind(s)
         if kind == "permission":
-            self.act_on(s, "waiting", winctl.reject_with, s["title"], text)
+            self.act_on(s, "waiting", winctl.reject_with, s["title"], text, pid=s["pid"])
         elif kind == "question":
             n_options = len(s["pending"][2]["questions"][0]["options"])
-            self.act_on(s, "waiting", winctl.answer_other, s["title"], n_options, text)
+            self.act_on(s, "waiting", winctl.answer_other, s["title"], n_options, text, pid=s["pid"])
         else:
             return
         self.reply.clear()
@@ -668,13 +735,13 @@ class Island(QWidget):
             return winctl.focus(s["title"], s["pid"])
         if s["status"] == "waiting":         # only type into a prompt that is still there
             if key == "esc":
-                self.act_on(s, "waiting", winctl.reject_with, s["title"], "")
+                self.act_on(s, "waiting", winctl.reject_with, s["title"], "", pid=s["pid"])
             else:
-                self.act_on(s, "waiting", winctl.press, s["title"], key)
+                self.act_on(s, "waiting", winctl.press, s["title"], key, pid=s["pid"])
             self.attention.discard(s["sid"])
             QTimer.singleShot(1200, self.refresh)
 
-    def act_on(self, s, expect, action, *args):
+    def act_on(self, s, expect, action, *args, **kwargs):
         """Run action off the UI thread, only if the chat is still in the state its card showed.
 
         Typing into a terminal that moved on (a new prompt, another question) would answer the wrong thing,
@@ -687,7 +754,7 @@ class Island(QWidget):
             if expect and (status != expect or at != status_at):
                 return
             try:
-                action(*args)
+                action(*args, **kwargs)
             except Exception as e:
                 print("action failed:", e, file=sys.stderr)
         threading.Thread(target=job, daemon=True).start()
@@ -711,7 +778,7 @@ class Island(QWidget):
                 self.settings_win.close()
         self.apply_hover()
         if not self.island_hidden:
-            self.stay_on_top()
+            self.stay_on_top(raise_front=True)    # you summoned it: come forward even past other notch apps
 
     def sync_hotkey(self):
         want = bool(self.cfg["global_hotkey"])
@@ -787,7 +854,7 @@ class Island(QWidget):
         Also settles which chat the reply box answers, since that changes card heights.
         """
         self.reply_sid = self.pick_reply_sid()
-        top = 10 + self.HEAD_H + self.PILL_H + self.PILL_GAP
+        top = 10 + self.notch_pad() + self.HEAD_H + self.PILL_H + self.PILL_GAP
         heights = [self.card_height(s) + self.CARD_GAP for s in self.sessions]
         need = top + (sum(heights) if heights else 44) + 6
         g = self.screen_geo()
@@ -814,7 +881,19 @@ class Island(QWidget):
         """Bar height and closed width: from the settings, or when docked, the notch plus a wing each side."""
         n = self.notch
         self.CH = n.height() if n else int(self.cfg["bar_height"])
-        self.mini_w = n.width() + 2 * self.notch_wing() if n else self.CH + 4
+        if self.companion():
+            self.mini_w = COMPANION_W            # a small pill beside the notch, not the notch itself
+        else:
+            self.mini_w = n.width() + 2 * self.notch_wing() if n else self.CH + 4
+
+    def notch_pad(self):
+        """Docked under a real camera notch, the panel starts below it, so no button hides behind the camera."""
+        n = self.notch
+        if not n:
+            return 0
+        if getattr(self, "_pad_for", None) != n:            # asking AppKit every frame is too slow
+            self._pad_for, self._pad = n, max(0, n.height() - 6) if PLAT.look.notch_rect(self.screen()) else 0
+        return self._pad
 
     def notch_wing(self):
         """Docked and closed, the island is the notch alone, with a small wing for the mascot while there is
@@ -854,17 +933,18 @@ class Island(QWidget):
         self.dock(self.notch_of(self.screen()))
 
     def snap_to_notch(self, cursor):
-        """While dragging, dock when the bar's top centre nears the notch and undock when pulled away."""
+        """While dragging, dock when the cursor enters a box a bit bigger than the notch, and undock when
+        pulled well clear of it. The box is a forgiving target: step inside and the bar takes the notch
+        style right away, so you see where it will land. A hysteresis margin stops it flickering at the edge.
+        """
         n = self.notch_of(self.screen())
         if not n:
             return
+        near = QRect(n.left() - NOTCH_SNAP, n.top(), n.width() + 2 * NOTCH_SNAP, n.height() + NOTCH_SNAP)
         if self.notch:
-            if math.hypot(cursor.x() - n.center().x(), cursor.y() - n.center().y()) > NOTCH_SNAP * 1.5:
+            if not near.adjusted(-NOTCH_SNAP, 0, NOTCH_SNAP, NOTCH_SNAP).contains(cursor):
                 self.dock(None)
-            return
-        g = self.screen_geo()
-        top_c = QPointF(g.right() + 1 - self.cfg["dx"] - self.W / 2, g.bottom() + 1 - self.cfg["dy"] - self.CH)
-        if math.hypot(top_c.x() - n.center().x(), top_c.y() - n.bottom()) < NOTCH_SNAP:
+        elif near.contains(cursor):
             self.dock(n)
 
     # ---------------------------------------------------------------- animation
@@ -942,10 +1022,19 @@ class Island(QWidget):
         inner_w, inner_h = math.ceil(win_w), math.ceil(win_h)
         outer_w, outer_h = inner_w + 2 * self.M, inner_h + 2 * self.M
         if self.notch:
-            x, y = self.notch.center().x() + 1 - outer_w // 2, self.notch.top()
+            if self.companion():
+                # Beside the notch: left-anchored at its right edge, so the pill holds still while it grows
+                # rightward and downward. Clamped so an open panel stays on screen.
+                g = self.screen_geo()
+                x = min(self.notch.right() + COMPANION_GAP - self.M, g.right() + 1 - outer_w)
+                y = self.notch.top()
+                pill_x = self.notch.right() + COMPANION_GAP - x
+            else:
+                x, y = self.notch.center().x() + 1 - outer_w // 2, self.notch.top()
+                pill_x = (outer_w - width) / 2
             if self.geometry().getRect() != (x, y, outer_w, outer_h):
-                self.setGeometry(x, y, outer_w, outer_h)
-            self.pill = QRectF((outer_w - width) / 2, 0, width, h)
+                self.setGeometry(int(x), int(y), outer_w, outer_h)
+            self.pill = QRectF(pill_x, 0, width, h)
             self.sync_glass()
             return
         g = self.screen_geo()
@@ -964,6 +1053,10 @@ class Island(QWidget):
         self.pill = QRectF(outer_w - self.M - width, pill_y, width, h)
         self.sync_glass()
 
+    def liquid(self):
+        """macOS 26 Liquid Glass is behind the shape: it brings its own shadow and edge."""
+        return self.glassed and getattr(PLAT.look, "LIQUID", False)
+
     def sync_glass(self):
         """Keep the macOS glass under the painted shape. Docked in the notch the island stays black instead."""
         want = self.cfg["glass"] and PLAT.look.HAS_GLASS and self.notch is None
@@ -971,9 +1064,26 @@ class Island(QWidget):
             self.glassed = PLAT.look.glass(self, self.pill if want else None, self.RAD, BG.lightnessF() < 0.5)
 
     # ---------------------------------------------------------------- mouse
-    def stay_on_top(self):
-        """Windows and macOS sometimes drop the island behind other apps; put it (and settings) back on top."""
-        PLAT.look.keep_on_top(self, self.notch is not None)
+    def wants_front(self):
+        """Whether the island should push itself to the very front right now.
+
+        Docked, we stay a polite neighbour to other notch apps and only come forward when Claude has
+        something to show or you are reaching for it; otherwise we hold our level without fighting for the
+        top. Floating (no notch) we always stay on top, as before.
+        """
+        if self.notch is None:
+            return True
+        return bool(self.hover or self.lingering or self.dragging or self.kb_open or self.working()
+                    or self.attention or self.toast or self.previewing() or self.opening.target > 0.01)
+
+    def stay_on_top(self, raise_front=None):
+        """Windows and macOS sometimes drop the island behind other apps; put it (and settings) back on top.
+
+        raise_front None decides politely from wants_front(); pass True to force the island forward now.
+        """
+        if raise_front is None:
+            raise_front = self.wants_front()
+        PLAT.look.keep_on_top(self, self.notch is not None, raise_front=raise_front)
         if self.settings_win and self.settings_win.isVisible():
             PLAT.look.keep_on_top(self.settings_win, self.notch is not None)
 
@@ -983,6 +1093,7 @@ class Island(QWidget):
 
     def leaveEvent(self, e):
         self.hover_hit = None
+        self.tip.hide()
         if self.attention and not self.reply.hasFocus():
             self.attention.clear()   # seen: back to plain hover behaviour
         self.hover_timer.start(int(self.cfg["linger_s"] * 1000) + 50)
@@ -1003,7 +1114,10 @@ class Island(QWidget):
         if self.lingering and not self.hover:
             self.hover_timer.start(int((linger_s - (mono - self.last_hover)) * 1000) + 50)
         typing = self.reply.hasFocus() and bool(self.reply.text())
-        keep_open = ((self.hover and not on_bar_pin) or self.lingering or self.attention or typing
+        # Companion mode shows a compact strip for news instead of throwing the whole panel open, so a waiting
+        # chat does not force the full detail; you still open it yourself by hovering.
+        attention_opens = self.attention and not self.companion()
+        keep_open = ((self.hover and not on_bar_pin) or self.lingering or attention_opens or typing
                      or self.previewing() or self.kb_open)
         want = 1.0 if keep_open and not self.dragging else 0.0
         if want != self.opening.target:
@@ -1012,8 +1126,14 @@ class Island(QWidget):
             for sp in (self.opening, self.bar_width):
                 sp.tune(*(self.open_spring if want else self.close_spring))
         self.opening.target = want
-        self.bar_width.target = self.mini_w if self.is_mini() and not want else self.W
+        if self.companion() and not want:
+            # closed: a slim strip (mascot + one line) when there is news, otherwise just the mascot pill
+            self.bar_width.target = COMPANION_NOTIF_W if self.has_news() else self.mini_w
+        else:
+            self.bar_width.target = self.mini_w if self.is_mini() and not want else self.W
         self.visibility.target = 1.0 if self.should_show() else 0.0
+        if not want:
+            self.tip.hide()            # the panel is closing: no tooltip should linger over the bar
         self.kick()
 
     def hit_at(self, pos):
@@ -1062,6 +1182,29 @@ class Island(QWidget):
                 lines.append(f"Running sub-agents: {len(running)} · {fmt_tokens(tokens)} tokens")
         return "\n".join(lines)
 
+    def collapse_for_drag(self):
+        """Snap the panel shut at the start of a drag, so the window stays a fixed-size bar while it moves.
+
+        Dragging the open panel is jumpy: it resizes every frame (and can flip from opening upward to
+        downward as it nears an edge) while it is anchored to a screen corner. Collapsed, only the bar moves.
+        """
+        self.tip.hide()
+        self.hover = self.lingering = self.kb_open = False
+        self.attention.clear()
+        for sp in (self.opening, self.bar_width):
+            sp.tune(*self.close_spring)
+        self.opening.x = self.opening.target = 0.0
+        self.bar_width.x = self.bar_width.target = self.mini_w if self.is_mini() else self.W
+        self.win_box = (0.0, 0.0)
+
+    def place_under_cursor(self, gp):
+        """While dragging, keep the compact bar centred under the cursor, so it moves with the pointer
+        instead of drifting away from a corner anchor ("moving it from afar")."""
+        g = self.screen_geo()
+        width = self.bar_width.target or self.W
+        self.cfg["dx"] = clamp(g.right() + 1 - gp.x() - width / 2, 0, g.width() - self.W)
+        self.cfg["dy"] = clamp(g.bottom() + 1 - gp.y() - self.CH / 2, 0, g.height() - self.CH)
+
     def mousePressEvent(self, e):
         self.activateWindow()                    # a click gives the island the keyboard (Esc, arrows, Ctrl+…)
         self.setFocus()
@@ -1072,14 +1215,15 @@ class Island(QWidget):
 
     def mouseMoveEvent(self, e):
         if self.press_at and e.buttons() & Qt.MouseButton.LeftButton:
-            start, dx0, dy0 = self.press_at
-            d = e.globalPosition().toPoint() - start
-            self.dragging = self.dragging or abs(d.x()) + abs(d.y()) > 6
+            start, _dx0, _dy0 = self.press_at
+            gp = e.globalPosition().toPoint()
+            was_dragging = self.dragging
+            self.dragging = self.dragging or (gp - start).manhattanLength() > 6
             if self.dragging:
-                g = self.screen_geo()
-                self.cfg["dx"] = clamp(dx0 - d.x(), 0, g.width() - self.W)
-                self.cfg["dy"] = clamp(dy0 - d.y(), 0, g.height() - self.CH)
-                self.snap_to_notch(e.globalPosition().toPoint())
+                if not was_dragging:
+                    self.collapse_for_drag()     # drag the compact bar, not the resizing open panel
+                self.place_under_cursor(gp)      # the bar follows the pointer
+                self.snap_to_notch(gp)
                 self.apply_geometry()
             return
         hit = self.hit_at(e.position())
@@ -1088,10 +1232,7 @@ class Island(QWidget):
             clickable = hit and not hit[0].startswith("limit:")   # the limit pills only have a tooltip
             self.setCursor(Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor)
             tip = self.tooltip(*hit) if hit else None
-            if tip:
-                QToolTip.showText(QCursor.pos(), tip, self)
-            else:
-                QToolTip.hideText()
+            self.tip.show_text(QCursor.pos(), tip, self.notch is not None)
             self.update()
         if self.opening.target == 0.0 and hit != ("pin", "bar"):
             self.hover_timer.start(self.cfg["hover_delay_ms"])   # moved off the bar's pin: open after a rest
@@ -1145,7 +1286,7 @@ class Island(QWidget):
                 still_same = partial(same_process, s["pid"], s["sfile"])
                 self.act_on(s, None, winctl.close, s["title"], s["pid"], still_same)
             elif s["status"] == "idle":      # typing is only safe at an idle prompt
-                self.act_on(s, "idle", winctl.send_command, s["title"], "/compact")
+                self.act_on(s, "idle", winctl.send_command, s["title"], "/compact", pid=s["pid"])
             QTimer.singleShot(1500, self.refresh)
         elif s:
             self.confirm = (sid, action, time.time() + 4)
@@ -1198,7 +1339,7 @@ class Island(QWidget):
         elif k == K.Key_Delete and cur:
             self.do("close", cur)              # like the X, the first press only asks
         elif k in (K.Key_F1, K.Key_Question):
-            QToolTip.showText(self.mapToGlobal(self.pill.topLeft().toPoint()), KEYS_HELP, self)
+            self.tip.show_text(self.mapToGlobal(self.pill.topLeft().toPoint()), KEYS_HELP, self.notch is not None)
         else:
             return super().keyPressEvent(e)
         self.apply_hover()
@@ -1297,14 +1438,17 @@ class Island(QWidget):
         if self.notch:
             bg = NOTCH_BLACK
         elif self.glassed:              # the blur shows through a lighter tint of the background colour
-            bg = QColor(BG.red(), BG.green(), BG.blue(), round(BG.alpha() * GLASS_TINT))
+            tint = LIQUID_TINT if self.liquid() else GLASS_TINT
+            bg = QColor(BG.red(), BG.green(), BG.blue(), round(BG.alpha() * tint))
         else:
             bg = BG
         rad = self.RAD
         if self.notch:                  # small and tight round the notch, softer as it opens, like Alcove
             rad = lerp(min(self.CH * 0.42, 14), 26, p)
+        flush = self.notch is not None and not self.companion()   # companion is a free pill, rounded all round
         shape = paint_frame(qp, r, rad, bg, BG.alphaF(), snap=1 if self.springs_settled() else 4,
-                            flush_top=self.notch is not None, glass=self.glassed, ear=NOTCH_EAR)
+                            flush_top=flush, glass=self.glassed, ear=NOTCH_EAR,
+                            native_edge=self.liquid() and not self.notch)
         qp.setClipPath(shape)
         self.hits = []
         bar_alpha = clamp(1 - p * 4)    # the bar's content is gone by p = 0.25, before the panel's appears
@@ -1333,6 +1477,8 @@ class Island(QWidget):
             x = r.left() + (((time.monotonic() - self.t0) * 0.55) % 1.0) * (r.width() + seg) - seg
             qp.setPen(Qt.PenStyle.NoPen)
             qp.setBrush(CLAUDE)
+            qp.setClipRect(QRectF(r.left() + rad, r.top(), r.width() - 2 * rad, r.height()),
+                           Qt.ClipOperation.IntersectClip)    # the straight part of the edge, clear of the corners
             qp.drawRoundedRect(QRectF(x, r.bottom() - 2.5, seg, 2.5), 1.2, 1.2)
         qp.end()
         if self.reply.isVisible() or (p > 0.95 and not self.reply_rect.isNull()):
@@ -1400,8 +1546,10 @@ class Island(QWidget):
         left = r.right() - self.W
         full = clamp((self.bar_width.x - self.mini_w) / max(1, self.W - self.mini_w))   # 0 mini .. 1 full width
         if self.notch and full < 0.35:
+            if self.companion():
+                return self.paint_companion_pill(qp, r)
             return self.paint_notch_wings(qp, r)
-        mascot_x = lerp(r.center().x(), r.left() + 28, full)
+        mascot_x = lerp(r.center().x(), r.left() + 32, full)
         self.paint_mascot(qp, QPointF(mascot_x, cy + 2), 20 if full > 0.5 else 22, self.mascot_mode())
         if full < 0.35:                  # mini: the mascot alone
             self.bar_pin = QRectF()
@@ -1409,11 +1557,11 @@ class Island(QWidget):
         base = qp.opacity()
         qp.setOpacity(base * clamp((full - 0.35) / 0.65))
         line1, line2, color2 = self.bar_lines(time.time())
-        pin_c = QPointF(r.right() - 11, top + 11)
+        pin_c = QPointF(r.right() - 14, top + 14)
         self.bar_pin = QRectF(pin_c.x() - 11, pin_c.y() - 10, 22, 20)
         if self.hover or self.pinned:
             draw_pin(qp, pin_c, 10, self.pin_color(self.hover_hit == ("pin", "bar"), WHITE_200), upright=self.pinned)
-        right = r.right() - 26
+        right = r.right() - 30
         pct = self.limit_state("five_hour", time.time())[0]
         if pct is not None:
             color = limit_color(pct)
@@ -1421,10 +1569,27 @@ class Island(QWidget):
             self.draw_text(qp, right - 30, cy + 4, 44, 16, f"{pct:.0f}%", self.f_small, color,
                            Qt.AlignmentFlag.AlignHCenter)
             right -= 40
-        x = left + 52
+        x = left + 56
         self.draw_text(qp, x, top + offset + 9, right - x, 20, line1, self.f_main, WHITE)
         self.draw_text(qp, x, top + offset + 28, right - x, 18, line2, self.f_body, color2)
         qp.setOpacity(base)
+
+    def paint_companion_pill(self, qp, r):
+        """Companion mode, closed: a small Claude mascot in a pill beside the notch. The mascot animates for
+        its state (coding/waiting/done/idle); a coloured dot flags a chat that needs you or just finished."""
+        self.bar_pin = QRectF()
+        cy = r.top() + self.CH / 2
+        self.paint_mascot(qp, QPointF(r.center().x(), cy + 1), min(16, self.CH * 0.46), self.mascot_mode())
+        if any(s["status"] == "waiting" for s in self.sessions):
+            color = AMBER
+        elif self.toast and self.toast[0] == "done":
+            color = GREEN
+        else:
+            color = None
+        if color is not None:
+            qp.setPen(Qt.PenStyle.NoPen)
+            qp.setBrush(color)
+            qp.drawEllipse(QPointF(r.right() - 8, r.top() + 8), 3.5, 3.5)
 
     def paint_notch_wings(self, qp, r):
         """Docked and closed: the working mascot peeking out left of the notch, a dot right of it when a chat
@@ -1462,7 +1627,7 @@ class Island(QWidget):
         now, t = time.time(), self.anim_t()
         x0, width = r.right() - self.W + 12, self.W - 24
         # blocks are drawn at their final place and uncovered as the shape grows
-        y = (r.top() + 10) if self.grow_down else (r.bottom() - self.panel_height.x + 10)
+        y = (r.top() + 10 + self.notch_pad()) if self.grow_down else (r.bottom() - self.panel_height.x + 10)
         qp.save()
         self.reveal(qp, r, y, self.HEAD_H)
         self.paint_header(qp, x0, y, width)

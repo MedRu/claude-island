@@ -21,6 +21,7 @@ HUD_MATERIAL, BEHIND_WINDOW, ALWAYS_ACTIVE, BELOW = 13, 0, 1, -1   # NSVisualEff
 
 ACCESSORY_POLICY = 1         # NSApplicationActivationPolicyAccessory
 HAS_GLASS = True             # glass() works when pyobjc is installed
+LIQUID = False               # the glass is macOS 26 Liquid Glass, which draws its own shadow and edge
 _glass_views = {}            # window id -> the native view blurring what is behind that window
 
 
@@ -75,32 +76,44 @@ def notch_rect(screen):
     return QRect(g.center().x() - GUESS_W // 2, g.top(), GUESS_W, menu_h)
 
 
-def keep_on_top(widget, over_menu_bar=False):
+def keep_on_top(widget, over_menu_bar=False, bump=0, raise_front=True):
     """Float above other apps, on every desktop and over full-screen apps.
 
     Docked in the notch the island sits inside the menu bar, so its level must be above the menu bar too.
+    bump raises the level a little more, so the tooltip sits above the island.
+
+    raise_front=False keeps our window level but does NOT re-order to the front. That makes us a polite
+    neighbour to other notch apps (Alcove, NotchNook, Boring Notch...): when idle we no longer shove
+    ourselves on top every second, so they are not fought for the top spot. We only come forward when
+    Claude has news or you reach for it.
     """
     if not widget.isVisible():
         return
     try:
         import objc
         window = objc.objc_object(c_void_p=int(widget.winId())).window()
-        level = MENU_LEVEL if over_menu_bar else FLOATING_LEVEL
+        level = (MENU_LEVEL if over_menu_bar else FLOATING_LEVEL) + bump
         if window.level() != level:
             window.setLevel_(level)
         if window.collectionBehavior() != EVERYWHERE:
             window.setCollectionBehavior_(EVERYWHERE)
-        window.orderFrontRegardless()                      # in front without taking focus
+        if raise_front:
+            window.orderFrontRegardless()                  # in front without taking focus
     except Exception:                                      # no pyobjc, or no native window yet
         widget.raise_()
 
 
 def _make_glass(content, dark):
     """Liquid Glass on macOS 26 and later, the frosted HUD material before it."""
+    global LIQUID
     import objc
     from AppKit import NSAppearance, NSMakeRect, NSVisualEffectView
     try:
         view = objc.lookUpClass("NSGlassEffectView").alloc().initWithFrame_(NSMakeRect(0, 0, 10, 10))
+        LIQUID = True
+        # The window shadow is worked out once from what was painted, so it trails the island's animated
+        # shape as a ghost plate; Liquid Glass draws a shadow of its own.
+        content.window().setHasShadow_(False)
     except objc.nosuchclass_error:
         view = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, 10, 10))
         view.setMaterial_(HUD_MATERIAL)

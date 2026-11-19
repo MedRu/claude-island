@@ -41,11 +41,13 @@ def notch_rect(screen):
     return None
 
 
-def keep_on_top(widget, over_menu_bar=False):
+def keep_on_top(widget, over_menu_bar=False, bump=0, raise_front=True):
     """Put the island back in the topmost band.
 
     Windows drops a topmost window behind others now and then (after the taskbar or a full-screen app took
     the top, or another topmost window was shown), so this runs every second. It never takes the focus.
+    bump and raise_front are no-ops here: Windows has no camera notch to share with other apps, so the
+    island keeps re-asserting topmost as before.
     """
     if widget.isVisible():
         ctypes.windll.user32.SetWindowPos(ctypes.c_void_p(int(widget.winId())), HWND_TOPMOST, 0, 0, 0, 0, KEEP_FLAGS)

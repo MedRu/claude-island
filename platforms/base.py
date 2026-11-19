@@ -15,10 +15,10 @@ class WinCtl(Protocol):
 
     def focus(self, title: str, pid: Optional[int] = None) -> bool: ...
     def close(self, title: str, pid: int, still_same_process: Callable[[], bool] = ...) -> Optional[str]: ...
-    def send_command(self, title: str, text: str) -> bool: ...          # e.g. "/compact" at an idle prompt
-    def press(self, title: str, ch: str) -> bool: ...                   # answer a prompt with one key
-    def reject_with(self, title: str, text: str) -> bool: ...           # Esc, then what to do instead
-    def answer_other(self, title: str, n_options: int, text: str) -> bool: ...
+    def send_command(self, title: str, text: str, pid: Optional[int] = None) -> bool: ...          # e.g. "/compact" at an idle prompt
+    def press(self, title: str, ch: str, pid: Optional[int] = None) -> bool: ...                   # answer a prompt with one key
+    def reject_with(self, title: str, text: str, pid: Optional[int] = None) -> bool: ...           # Esc, then what to do instead
+    def answer_other(self, title: str, n_options: int, text: str, pid: Optional[int] = None) -> bool: ...
     def hide_all(self, chats: list, path: Optional[Path] = None) -> None: ...    # [(title, pid)]; path: memory
     def show_all(self, path: Optional[Path] = None) -> None: ...
     def prune_hidden(self, live_titles: list) -> None: ...
@@ -68,4 +68,4 @@ class Look(Protocol):
     def force_focus(self, widget) -> None: ...        # give the window the keyboard
     def notch_rect(self, screen): ...                 # global QRect of the screen's camera notch, or None
     def glass(self, widget, rect, radius: float, dark: bool) -> bool: ...   # native blur behind rect; True if shown
-    def keep_on_top(self, widget, over_menu_bar: bool) -> None: ...   # every second, and over the menu bar when docked
+    def keep_on_top(self, widget, over_menu_bar: bool, bump: int = 0, raise_front: bool = True) -> None: ...  # bump lifts a tooltip over the island; raise_front=False stays put, a polite neighbour to other notch apps

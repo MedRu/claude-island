@@ -17,6 +17,7 @@ CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude
 CLAUDE_SETTINGS = CLAUDE_HOME / "settings.json"
 STATUS_SCRIPT = HERE / "statusline" / "island_statusline.py"
 STATUS_BEFORE = HERE / "config" / "statusline_before.json"   # your own status line, given back when turned off
+STATUS_OFF = HERE / "config" / "statusline_off.mark"         # you turned the switch off: startup leaves it off
 AUTOSTART = get_platform().autostart
 MASCOT_STATES = {"coding": "Working", "waiting": "Needs you", "done": "Done", "idle": "Idle", "sleep": "Sleeping"}
 SOUND_CUES = ("start", "needs", "done", "warn", "limit")   # the keys of sounds.CUES
@@ -65,8 +66,9 @@ DEFAULTS = {
     "dx": 12,
     "dy": 12,
     "notch": False,                 # macOS: docked in the camera notch
+    "companion": False,             # macOS: always show a small Claude pill beside the notch (not over it)
 }
-NOT_RESET = ("pinned", "dx", "dy", "notch")   # "Reset to defaults" leaves the widget where it is
+NOT_RESET = ("pinned", "dx", "dy", "notch", "companion")   # "Reset to defaults" leaves the widget where it is
 
 
 def load():
@@ -198,6 +200,14 @@ def set_status_line(on):
         return False
     current = data.get("statusLine") if isinstance(data.get("statusLine"), dict) else None
     ours = STATUS_SCRIPT.name in _status_command(data)
+    try:
+        if on:
+            STATUS_OFF.unlink(missing_ok=True)
+        else:
+            STATUS_OFF.parent.mkdir(exist_ok=True)
+            STATUS_OFF.touch()
+    except OSError:
+        pass
     if on:
         if status_line_installed():
             return True
@@ -226,16 +236,18 @@ def _our_parts(command):
 
 
 def ensure_status_line():
-    """At startup: set up the status line when there is none yet, and repair ours when Python or the island moved.
+    """At startup: set up the status line, and repair ours when Python or the island moved.
 
-    A status line of your own is never changed here; the Startup switch does that, keeping yours running.
+    A status line of your own is wrapped, not replaced: it keeps showing, and the island gets the limits too.
+    Nothing is set up when you turned the Startup switch off.
     """
     data = _read_claude_settings()
     if data is None:
         return
     command = _status_command(data)
-    if not command:
-        set_status_line(True)
+    if not status_line_installed():
+        if not STATUS_OFF.exists():
+            set_status_line(True)
         return
     parts = _our_parts(command)
     if parts and (parts[0] != _console_python() or parts[1] != STATUS_SCRIPT.as_posix()):

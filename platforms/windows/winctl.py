@@ -278,16 +278,16 @@ def _in_front(title, keys):
 
 # Prompt keys checked on Claude Code 2.1.327. Permission prompt: "1" is Yes, Esc is No and the next line says
 # what to do instead. Question: an option's number picks it, and options + 1 is "Type something".
-def send_command(title, text):
+def send_command(title, text, pid=None):
     """Run a line such as '/compact'. Only call it while the chat is idle at its prompt."""
     return _in_front(title, lambda h: _type_line(h, text))
 
 
-def press(title, ch):
+def press(title, ch, pid=None):
     return _in_front(title, lambda h: _send(h, _chars(ch)))
 
 
-def reject_with(title, text):
+def reject_with(title, text, pid=None):
     def keys(h):
         _send(h, _key(VK_ESCAPE))
         time.sleep(0.8)
@@ -296,7 +296,7 @@ def reject_with(title, text):
     return _in_front(title, keys)
 
 
-def answer_other(title, n_options, text):
+def answer_other(title, n_options, text, pid=None):
     def keys(h):
         _send(h, _chars(str(n_options + 1)))
         time.sleep(0.4)

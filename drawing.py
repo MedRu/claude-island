@@ -87,14 +87,20 @@ def _shadow(w, h, rad, alpha, dpr):
     return pm
 
 
-def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False, ear=0.0):
+def paint_frame(qp, rect, rad, bg, shadow_k=1.0, snap=1, flush_top=False, glass=False, ear=0.0, native_edge=False):
     """Paint the shadow, the filled rounded shape and its border; return the shape for clipping the content.
 
     The shadow is cached by size, rounded to snap px so an animation does not flood the cache. flush_top, for the
     notch dock, squares the top corners and drops the shadow and border so the island merges with the notch.
     With glass (a native blur behind the shape) the shadow stays outside the shape, so it does not darken the
-    glass, and a light rim catches the top edge.
+    glass, and a light rim catches the top edge. native_edge: the glass draws its own shadow and edge (macOS
+    Liquid Glass), so only the tint is painted.
     """
+    if native_edge:
+        shape = QPainterPath()
+        shape.addRoundedRect(rect, rad, rad)
+        qp.fillPath(shape, bg)
+        return shape
     if flush_top:
         shape = notch_shape(rect, rad, ear)
         qp.fillPath(shape, bg)
