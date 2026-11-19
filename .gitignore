@@ -1,0 +1,26 @@
+# Local state written by the widget
+config/island_config.json
+config/sounds/
+config/hidden_windows.txt
+config/show.flag
+config/island.log
+config/island.lock
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS and editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
