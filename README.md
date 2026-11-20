@@ -9,7 +9,8 @@ macOS and Linux run it with a few features missing (see [Platform support](#plat
 
 Not affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.
 
-<!-- screenshot: docs/screenshot.png -->
+<!-- screenshot: docs/hero.png -->
+![Claude Island open over a terminal: three chats, the plan limits, a chat asking for permission and its sub-agents](docs/hero.png)
 
 ## Features
 
@@ -163,6 +164,8 @@ Hover the bar to open the panel. It grows upward only and stays open 1.2 seconds
 (Settings, Timing). The header row holds the mascot and the buttons: Settings, New chat, Hide all (eye) and
 Pin.
 
+![The closed bar: 2 chats in progress, one of them needs you, the 5-hour limit at 38 %](docs/bar.png)
+
 The two limit pills show a ring and a percentage that change colour as you approach the limit: green, yellow
 from 50 %, then orange, red from 90 %. A thin grey bar along the bottom of each pill shows how much of its
 window (5 hours or 7 days) has gone by; it never changes colour.
@@ -279,6 +282,8 @@ below). Drag it by its header; Esc or ✕ closes it. Changes apply at once and t
 preview. Settings are saved to `config/island_config.json` shortly after the last change. **Reset to
 defaults** keeps the position and the pin.
 
+![Settings, the Timing page](docs/settings.png)
+
 Colours are picked from swatches (the last dot opens the full colour picker). The mouse wheel only changes a
 slider or number you clicked first, so scrolling the page never changes a value by accident.
 
@@ -312,6 +317,8 @@ while Claude works, the mascot peeks out on a small wing at the left, with a dot
 you (amber) or just finished (green). Hover opens the panel downward, in front of every app. Drag it away to
 undock. The choice is remembered across restarts.
 
+![Docked at the top centre, the panel opening downward from the notch](docs/top-dock.png)
+
 With `pip install pyobjc-framework-Cocoa`, the exact notch size is read from AppKit and the window is raised
 above the menu bar. Without it, the notch is estimated (200 pt wide, centred, on screens with the taller notch
 menu bar). This has so far only been tested on Windows with a simulated notch, not on a real Mac.
@@ -323,6 +330,8 @@ tab flush with that edge, its corners flaring into it like a notch: hanging from
 taskbar (or panel), or upright on a side. **Dock position** puts it anywhere along the edge (0 % = left or top
 end, 100 % = right or bottom end) and **Dock width** sets its length in px (default 72). You can also drag the
 bar onto any edge and along it; it sticks until pulled about 140 px away.
+
+![Docked on the taskbar, the panel opening upward](docs/edge-dock.png)
 
 The tab is never empty: idle, the mascot sits in it; while a chat works the tab grows and the mascot moves to one
 end, with Claude's turning spark at the other (an amber dot when a chat needs you, green when one finished).
@@ -436,6 +445,7 @@ cannot be told apart from the chat's own process. Contributions are welcome.
 | `platforms/<os>/autostart.py`, `look.py` | hook command and menu shortcut; UI fonts and window quirks |
 | `platforms/windows/tab_focus.ps1` | UI Automation fallback that selects an inactive Windows Terminal tab |
 | `platforms/windows/tab_count.ps1` | UI Automation: number of tabs per Windows Terminal window |
+| `docs/` | the screenshots in this README |
 | `config/` | settings, sounds, log and lock files written at run time (not in Git) |
 
 ## License
